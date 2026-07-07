@@ -1,0 +1,483 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="color-scheme" content="dark">
+<title>AI Journal</title>
+<style>
+/* ===== テーマ ===== */
+:root {
+  --bg: #0f1115;
+  --surface: #171a21;
+  --surface-2: #1e222b;
+  --border: #2a2f3a;
+  --text: #e8e9ec;
+  --muted: #8a8f98;
+  --accent: #7aa2f7;
+  --danger: #f77a7a;
+  --radius: 10px;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { background: var(--bg); color: var(--text); }
+body {
+  font-family: "Hiragino Kaku Gothic ProN", "Noto Sans JP", "Yu Gothic UI", system-ui, sans-serif;
+  line-height: 1.7;
+  font-size: 16px;
+}
+#app { max-width: 560px; margin: 0 auto; padding: 24px 16px 64px; }
+
+/* ===== 共通部品 ===== */
+.topbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px; }
+.topbar h1 { font-size: 18px; font-weight: 600; letter-spacing: 0.04em; }
+.icon-btn {
+  background: none; border: none; color: var(--muted); font-size: 18px;
+  cursor: pointer; padding: 8px; border-radius: var(--radius);
+  transition: color 180ms ease, background 180ms ease;
+}
+.icon-btn:hover { color: var(--text); background: var(--surface); }
+button.primary {
+  display: block; width: 100%; padding: 16px; font-size: 16px; font-weight: 600;
+  color: #0f1115; background: var(--accent); border: none; border-radius: var(--radius);
+  cursor: pointer; transition: filter 180ms ease, transform 180ms ease;
+}
+button.primary:hover { filter: brightness(1.1); }
+button.primary:active { transform: scale(0.99); }
+button.ghost {
+  display: block; width: 100%; padding: 12px; font-size: 14px;
+  color: var(--text); background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); cursor: pointer; transition: background 180ms ease;
+}
+button.ghost:hover { background: var(--surface-2); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.section { margin-top: 32px; }
+.section-title { font-size: 13px; color: var(--muted); margin-bottom: 8px; letter-spacing: 0.06em; }
+.muted { color: var(--muted); }
+.stack > * + * { margin-top: 8px; }
+
+/* ===== home ===== */
+.entry-item {
+  display: block; width: 100%; text-align: left; padding: 12px 16px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  cursor: pointer; color: var(--text); font-size: 15px;
+  transition: background 180ms ease, border-color 180ms ease;
+}
+.entry-item:hover { background: var(--surface-2); border-color: #3a4150; }
+.entry-item .meta { font-size: 12.5px; color: var(--muted); display: flex; gap: 8px; }
+.entry-item .head { display: flex; gap: 8px; align-items: baseline; }
+.entry-item .snippet { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.empty-note { color: var(--muted); font-size: 14px; padding: 16px 0; }
+
+/* ===== write ===== */
+.write input[type="text"] {
+  width: 100%; padding: 12px 0; font-size: 18px; font-weight: 600;
+  background: none; border: none; color: var(--text); font-family: inherit;
+}
+.write input[type="text"]::placeholder, .write textarea::placeholder { color: #565c68; }
+.write textarea {
+  width: 100%; min-height: 50vh; padding: 8px 0; font-size: 16px; line-height: 1.9;
+  background: none; border: none; color: var(--text); resize: vertical; font-family: inherit;
+}
+.write .hint { font-size: 12px; color: var(--muted); text-align: center; margin-top: 8px; }
+
+/* ===== entry ===== */
+.entry-view .date-line { font-size: 14px; color: var(--muted); margin-bottom: 4px; }
+.entry-view h2 { font-size: 20px; margin-bottom: 8px; }
+.entry-view .weather-line { font-size: 13px; color: var(--muted); margin-bottom: 24px; }
+.entry-view .body { white-space: pre-wrap; font-size: 16px; }
+
+/* ===== settings ===== */
+.settings-row { padding: 16px 0; border-bottom: 1px solid var(--border); }
+.settings-row .label { font-size: 13px; color: var(--muted); margin-bottom: 8px; }
+
+/* ===== toast ===== */
+#toast {
+  position: fixed; left: 50%; bottom: 32px; transform: translate(-50%, 8px);
+  background: var(--surface-2); border: 1px solid var(--border); color: var(--text);
+  padding: 8px 16px; border-radius: var(--radius); font-size: 14px;
+  opacity: 0; pointer-events: none; transition: opacity 200ms ease, transform 200ms ease;
+}
+#toast.show { opacity: 1; transform: translate(-50%, 0); }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<div id="toast" role="status"></div>
+<input type="file" id="importFile" accept=".json,application/json" hidden>
+<script>
+"use strict";
+
+// ===== 定数 =====
+const STORAGE_KEY = "ai-journal";
+const SCHEMA_VERSION = 1;
+const DEFAULT_LOCATION = { name: "仙台", lat: 38.2682, lon: 140.8694 };
+const WEEKDAYS = ["日", "月", "火", "水", "木", "金", "土"];
+const RECENT_LIMIT = 7;
+const SNIPPET_LEN = 40;
+const WEATHER_TIMEOUT_MS = 5000;
+const TOAST_MS = 2200;
+
+// WMO weather code → 日本語（Open-Meteo仕様）
+const WMO_DESC = {
+  0: "快晴", 1: "晴れ", 2: "晴れ時々曇り", 3: "曇り",
+  45: "霧", 48: "霧氷",
+  51: "霧雨", 53: "霧雨", 55: "強い霧雨", 56: "着氷性霧雨", 57: "着氷性霧雨",
+  61: "小雨", 63: "雨", 65: "大雨", 66: "着氷性の雨", 67: "着氷性の雨",
+  71: "小雪", 73: "雪", 75: "大雪", 77: "霧雪",
+  80: "にわか雨", 81: "にわか雨", 82: "激しいにわか雨", 85: "にわか雪", 86: "にわか雪",
+  95: "雷雨", 96: "雹を伴う雷雨", 99: "雹を伴う雷雨"
+};
+
+// ===== 状態 =====
+const state = {
+  data: null,      // 永続データ（storage層で管理）
+  view: "home",    // home | write | entry | settings
+  entryId: null    // entry表示中のID
+};
+
+// ===== storage層 =====
+function defaultData() {
+  return {
+    v: SCHEMA_VERSION,
+    settings: {
+      provider: "gemini",
+      apiKey: "",
+      location: { ...DEFAULT_LOCATION }
+    },
+    entries: [],
+    digests: { weekly: {}, monthly: {}, yearly: {} }
+  };
+}
+
+function loadData() {
+  let parsed = null;
+  try {
+    parsed = JSON.parse(localStorage.getItem(STORAGE_KEY));
+  } catch (e) {
+    // 壊れたデータは読めた分を諦めて初期化するしかないが、上書きは保存時まで遅延させる
+    console.error("localStorage parse error:", e);
+  }
+  if (!parsed || typeof parsed !== "object" || !Array.isArray(parsed.entries)) {
+    return defaultData();
+  }
+  // 将来のマイグレーションはここで parsed.v を見て行う
+  return parsed;
+}
+
+function saveData() {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state.data));
+  } catch (e) {
+    toast("保存に失敗しました（容量不足の可能性）");
+    console.error(e);
+  }
+}
+
+function downloadFile(filename, text, mime) {
+  const a = document.createElement("a");
+  const blob = new Blob([text], { type: mime });
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+function exportJson() {
+  downloadFile(`ai-journal-${todayStr()}.json`,
+    JSON.stringify(state.data, null, 2), "application/json");
+  toast("JSONをエクスポートしました");
+}
+
+function exportMarkdown() {
+  const lines = [`# AI Journal（${todayStr()} エクスポート）`, ""];
+  for (const e of sortedEntries()) {
+    lines.push(`## ${e.date}（${e.weekday}）${e.time}${e.title ? " " + e.title : ""}`);
+    lines.push("");
+    const meta = [];
+    if (e.weather) meta.push(weatherLine(e.weather));
+    if (e.location) meta.push(`@${e.location}`);
+    if (meta.length) { lines.push(`> ${meta.join("　")}`); lines.push(""); }
+    if (e.ai && e.ai.tags && e.ai.tags.length) { lines.push(e.ai.tags.join(" ")); lines.push(""); }
+    lines.push(e.body);
+    lines.push("");
+  }
+  downloadFile(`ai-journal-${todayStr()}.md`, lines.join("\n"), "text/markdown");
+  toast("Markdownをエクスポートしました");
+}
+
+function importJson(file) {
+  const reader = new FileReader();
+  reader.onload = () => {
+    let parsed;
+    try {
+      parsed = JSON.parse(reader.result);
+    } catch (e) {
+      toast("JSONの読み込みに失敗しました");
+      return;
+    }
+    if (!parsed || parsed.v !== SCHEMA_VERSION || !Array.isArray(parsed.entries)) {
+      toast("AI Journalのエクスポートファイルではありません");
+      return;
+    }
+    const cur = state.data.entries.length;
+    if (!confirm(`現在の日記 ${cur} 件を、インポートする ${parsed.entries.length} 件で置き換えます。よろしいですか？`)) return;
+    state.data = parsed;
+    saveData();
+    state.view = "home";
+    render();
+    toast("インポートしました");
+  };
+  reader.readAsText(file);
+}
+
+// ===== 日時ユーティリティ =====
+function pad(n) { return String(n).padStart(2, "0"); }
+function fmtDate(d) { return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; }
+function fmtTime(d) { return `${pad(d.getHours())}:${pad(d.getMinutes())}`; }
+function todayStr() { return fmtDate(new Date()); }
+function displayDate(dateStr) {
+  const [y, m, d] = dateStr.split("-");
+  return `${y}年${Number(m)}月${Number(d)}日`;
+}
+
+// ===== weather層 =====
+function weatherEmoji(code) {
+  if (code <= 1) return "☀️";
+  if (code === 2) return "⛅";
+  if (code === 3) return "☁️";
+  if (code === 45 || code === 48) return "🌫️";
+  if (code >= 95) return "⛈️";
+  if ((code >= 71 && code <= 77) || code === 85 || code === 86) return "❄️";
+  if (code >= 51) return "🌧️";
+  return "🌡️";
+}
+
+function weatherLine(w) {
+  return `${weatherEmoji(w.code)} ${w.desc} ${w.temp}°C（最高${w.tempMax} / 最低${w.tempMin}）湿度${w.humidity}%`;
+}
+
+async function fetchWeather(loc) {
+  const url = "https://api.open-meteo.com/v1/forecast"
+    + `?latitude=${loc.lat}&longitude=${loc.lon}`
+    + "&current=temperature_2m,relative_humidity_2m,weather_code"
+    + "&daily=temperature_2m_max,temperature_2m_min"
+    + "&forecast_days=1&timezone=auto";
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), WEATHER_TIMEOUT_MS);
+  try {
+    const res = await fetch(url, { signal: ctrl.signal });
+    if (!res.ok) return null;
+    const j = await res.json();
+    const code = j.current.weather_code;
+    return {
+      code,
+      desc: WMO_DESC[code] || "不明",
+      temp: Math.round(j.current.temperature_2m * 10) / 10,
+      tempMax: Math.round(j.daily.temperature_2m_max[0] * 10) / 10,
+      tempMin: Math.round(j.daily.temperature_2m_min[0] * 10) / 10,
+      humidity: Math.round(j.current.relative_humidity_2m)
+    };
+  } catch (e) {
+    return null; // オフライン・タイムアウト時。日記の保存自体は妨げない
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// ===== entry操作 =====
+function sortedEntries() {
+  return [...state.data.entries].sort((a, b) => b.id.localeCompare(a.id));
+}
+
+function findEntry(id) {
+  return state.data.entries.find(e => e.id === id) || null;
+}
+
+function saveEntry(title, body) {
+  const now = new Date();
+  const entry = {
+    // 同一秒内の連続保存でも衝突しないようミリ秒まで含める
+    id: `${fmtDate(now)}T${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}.${String(now.getMilliseconds()).padStart(3, "0")}`,
+    date: fmtDate(now),
+    weekday: WEEKDAYS[now.getDay()],
+    time: fmtTime(now),
+    title,
+    body,
+    weather: null,
+    location: state.data.settings.location.name,
+    ai: null
+  };
+  state.data.entries.push(entry);
+  saveData();
+  // 天気は後追いで付与（取得を待たせない・失敗しても日記は残る）
+  fetchWeather(state.data.settings.location).then(w => {
+    if (!w) return;
+    entry.weather = w;
+    saveData();
+    if (state.view === "home" || (state.view === "entry" && state.entryId === entry.id)) render();
+  });
+  return entry;
+}
+
+// ===== render =====
+function esc(s) {
+  return String(s).replace(/[&<>"']/g, c =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+function render() {
+  const app = document.getElementById("app");
+  if (state.view === "write") app.innerHTML = renderWrite();
+  else if (state.view === "entry") app.innerHTML = renderEntry();
+  else if (state.view === "settings") app.innerHTML = renderSettings();
+  else app.innerHTML = renderHome();
+
+  if (state.view === "write") {
+    const body = document.getElementById("body");
+    if (body) body.focus();
+  }
+}
+
+function renderHome() {
+  const entries = sortedEntries();
+  const recent = entries.slice(0, RECENT_LIMIT);
+  const list = recent.map(e => {
+    const snippet = e.title || e.body.slice(0, SNIPPET_LEN);
+    const emotion = e.ai && e.ai.emotion ? e.ai.emotion.label : "";
+    const weather = e.weather ? weatherEmoji(e.weather.code) : "";
+    return `<button class="entry-item" data-action="open-entry" data-id="${esc(e.id)}">
+      <span class="meta"><span>${esc(e.date)}（${esc(e.weekday)}）${esc(e.time)}</span><span>${weather}${emotion}</span></span>
+      <span class="head"><span class="snippet">${esc(snippet)}</span></span>
+    </button>`;
+  }).join("");
+  return `
+    <div class="topbar">
+      <h1>AI Journal</h1>
+      <button class="icon-btn" data-action="go-settings" title="設定" aria-label="設定">⚙</button>
+    </div>
+    <button class="primary" data-action="go-write">今日の日記を書く</button>
+    <div class="section">
+      <div class="section-title">最近の日記</div>
+      <div class="stack">${list || '<div class="empty-note">まだ日記がありません。最初の1日を書いてみましょう。</div>'}</div>
+    </div>`;
+}
+
+function renderWrite() {
+  return `
+    <div class="topbar">
+      <button class="icon-btn" data-action="go-home" title="戻る" aria-label="戻る">←</button>
+      <h1>${esc(displayDate(todayStr()))}</h1>
+      <span style="width:34px"></span>
+    </div>
+    <div class="write">
+      <input type="text" id="title" placeholder="タイトル（任意）" autocomplete="off">
+      <textarea id="body" placeholder="今日あったことを、そのまま書けばOK。"></textarea>
+      <button class="primary" data-action="save">保存</button>
+      <div class="hint">Ctrl+Enter でも保存できます</div>
+    </div>`;
+}
+
+function renderEntry() {
+  const e = findEntry(state.entryId);
+  if (!e) { state.view = "home"; return renderHome(); }
+  const weather = e.weather
+    ? `${weatherLine(e.weather)}　@${esc(e.location)}`
+    : `@${esc(e.location)}`;
+  return `
+    <div class="topbar">
+      <button class="icon-btn" data-action="go-home" title="戻る" aria-label="戻る">←</button>
+      <span style="width:34px"></span>
+    </div>
+    <div class="entry-view">
+      <div class="date-line">${esc(displayDate(e.date))}（${esc(e.weekday)}）${esc(e.time)}</div>
+      ${e.title ? `<h2>${esc(e.title)}</h2>` : ""}
+      <div class="weather-line">${weather}</div>
+      <div class="body">${esc(e.body)}</div>
+    </div>`;
+}
+
+function renderSettings() {
+  const n = state.data.entries.length;
+  return `
+    <div class="topbar">
+      <button class="icon-btn" data-action="go-home" title="戻る" aria-label="戻る">←</button>
+      <h1>設定</h1>
+      <span style="width:34px"></span>
+    </div>
+    <div class="settings-row">
+      <div class="label">場所（天気の取得地点）</div>
+      <div>${esc(state.data.settings.location.name)}</div>
+    </div>
+    <div class="settings-row">
+      <div class="label">バックアップ（現在 ${n} 件）</div>
+      <div class="stack">
+        <button class="ghost" data-action="export-json">JSONでエクスポート</button>
+        <button class="ghost" data-action="export-md">Markdownでエクスポート</button>
+        <button class="ghost" data-action="import">JSONからインポート（全置き換え）</button>
+      </div>
+    </div>`;
+}
+
+// ===== toast =====
+let toastTimer = null;
+function toast(msg) {
+  const el = document.getElementById("toast");
+  el.textContent = msg;
+  el.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove("show"), TOAST_MS);
+}
+
+// ===== イベント =====
+function goHome() { state.view = "home"; state.entryId = null; render(); }
+
+function leaveWriteSafely() {
+  const body = document.getElementById("body");
+  if (body && body.value.trim() && !confirm("書きかけの内容を破棄しますか？")) return;
+  goHome();
+}
+
+function handleSave() {
+  const title = document.getElementById("title").value.trim();
+  const body = document.getElementById("body").value.trim();
+  if (!body) { toast("本文が空です"); return; }
+  saveEntry(title, body);
+  goHome();
+  toast("保存しました");
+}
+
+document.addEventListener("click", e => {
+  const el = e.target.closest("[data-action]");
+  if (!el) return;
+  const action = el.dataset.action;
+  if (action === "go-write") { state.view = "write"; render(); }
+  else if (action === "go-home") { state.view === "write" ? leaveWriteSafely() : goHome(); }
+  else if (action === "go-settings") { state.view = "settings"; render(); }
+  else if (action === "open-entry") { state.view = "entry"; state.entryId = el.dataset.id; render(); }
+  else if (action === "save") { handleSave(); }
+  else if (action === "export-json") { exportJson(); }
+  else if (action === "export-md") { exportMarkdown(); }
+  else if (action === "import") { document.getElementById("importFile").click(); }
+});
+
+document.addEventListener("keydown", e => {
+  if (e.key === "Escape" && state.view !== "home") {
+    state.view === "write" ? leaveWriteSafely() : goHome();
+  } else if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && state.view === "write") {
+    e.preventDefault();
+    handleSave();
+  }
+});
+
+document.getElementById("importFile").addEventListener("change", e => {
+  const file = e.target.files[0];
+  if (file) importJson(file);
+  e.target.value = "";
+});
+
+// ===== 起動 =====
+state.data = loadData();
+render();
+</script>
+</body>
+</html>
