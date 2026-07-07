@@ -124,6 +124,10 @@ button.ghost:hover { background: var(--surface-2); }
   background: none; border: none; color: var(--text); resize: vertical; font-family: inherit;
 }
 .write .hint { font-size: 12px; color: var(--muted); text-align: center; margin-top: 8px; }
+.topbar h1[data-action="pick-date"] { cursor: pointer; border-radius: 10px; padding: 4px 8px; transition: background 180ms ease; }
+.topbar h1[data-action="pick-date"]:hover { background: var(--surface); }
+/* 日付ピッカー本体は見せない（hidden属性だとshowPicker()が効かないので視覚的に隠す） */
+#datePicker { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; border: 0; padding: 0; }
 .write input[type="text"]:focus-visible, .write textarea:focus-visible { outline: none; } /* 画面全体が編集領域なので枠は出さない */
 
 /* ===== entry ===== */
@@ -881,9 +885,10 @@ function renderWrite() {
     <div class="topbar">
       <button class="icon-btn" data-action="back" title="戻る" aria-label="戻る">←</button>
       <button class="icon-btn" data-action="draft-day" data-delta="-1" title="前の日" aria-label="前の日">‹</button>
-      <h1 id="writeDate">${esc(displayDate(state.draft.date))}</h1>
+      <h1 id="writeDate" data-action="pick-date" title="タップして日付を選ぶ" role="button" tabindex="0">${esc(displayDate(state.draft.date))}</h1>
       <button class="icon-btn" data-action="draft-day" data-delta="1" title="次の日" aria-label="次の日" ${isToday ? "disabled" : ""}>›</button>
       <span style="width:40px"></span>
+      <input type="date" id="datePicker" value="${state.draft.date}" max="${todayStr()}" aria-hidden="true">
     </div>
     <div class="write stack-lg">
       <div>
@@ -899,17 +904,17 @@ function renderWrite() {
         <textarea id="body" placeholder="${isToday ? "今日" : "この日"}あったことを、そのまま書けばOK。"></textarea>
       </div>
       <button class="primary" data-action="save">保存</button>
-      <div class="hint">Ctrl+Enter でも保存できます・‹ › で過去の日付にさかのぼれます</div>
+      <div class="hint">Ctrl+Enter でも保存できます・日付をタップするとカレンダーから選べます</div>
     </div>`;
 }
 
-// 日付送り。title/bodyの入力を消さないため、ヘッダーとラベルだけ部分更新する
-function shiftDraftDate(delta) {
-  const d = addDays(state.draft.date, delta);
-  if (d > todayStr()) return;
-  state.draft.date = d;
-  const isToday = d === todayStr();
-  document.getElementById("writeDate").textContent = displayDate(d);
+// 日付変更。title/bodyの入力を消さないため、ヘッダーとラベルだけ部分更新する
+function setDraftDate(dateStr) {
+  if (!dateStr || dateStr > todayStr()) return;
+  state.draft.date = dateStr;
+  const isToday = dateStr === todayStr();
+  document.getElementById("writeDate").textContent = displayDate(dateStr);
+  document.getElementById("datePicker").value = dateStr;
   document.querySelector("[data-action='draft-day'][data-delta='1']").disabled = isToday;
   const labels = document.querySelectorAll(".ask-label");
   if (labels.length >= 2) {
@@ -917,6 +922,10 @@ function shiftDraftDate(delta) {
     labels[1].textContent = `${isToday ? "今日" : "この日"}の気分は？`;
   }
   document.getElementById("body").placeholder = `${isToday ? "今日" : "この日"}あったことを、そのまま書けばOK。`;
+}
+
+function shiftDraftDate(delta) {
+  setDraftDate(addDays(state.draft.date, delta));
 }
 
 // --- entry ---
@@ -1212,6 +1221,10 @@ document.addEventListener("click", e => {
   else if (a === "open-entry") { state.entryFrom = state.view; state.view = "entry"; state.entryId = el.dataset.id; render(); }
   else if (a === "save") { handleSave(); }
   else if (a === "draft-day") { shiftDraftDate(Number(el.dataset.delta)); }
+  else if (a === "pick-date") {
+    const p = document.getElementById("datePicker");
+    try { p.showPicker ? p.showPicker() : p.click(); } catch (_) { p.click(); }
+  }
   else if (a === "go-search") { state.view = "search"; render(); }
   else if (a === "cal-move") {
     const [y, m] = state.calMonth.split("-").map(Number);
@@ -1285,6 +1298,10 @@ document.addEventListener("change", e => {
     state.data.settings.model = e.target.value;
     saveData();
     toast("モデルを変更しました");
+  } else if (e.target.id === "datePicker") {
+    const v = e.target.value;
+    if (v && v <= todayStr()) setDraftDate(v);
+    else e.target.value = state.draft.date;  // クリア・未来日は無効
   }
 });
 
