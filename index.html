@@ -4,6 +4,13 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#0d0f13">
+<link rel="manifest" href="./manifest.webmanifest">
+<link rel="apple-touch-icon" href="./icon-180.png">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<meta name="apple-mobile-web-app-title" content="AI Journal">
 <title>AI Journal</title>
 <style>
 /* ===== テーマ ===== */
@@ -96,6 +103,8 @@ button.ghost:hover { background: var(--surface-2); }
 }
 .meta-row { font-size: 12.5px; color: var(--muted); margin-top: 8px; display: flex; gap: 12px; }
 .empty-note { color: var(--muted); font-size: 14px; padding: 24px 8px; text-align: center; }
+.otd-head { font-size: 13px; color: var(--muted); margin: 8px 0; letter-spacing: 0.06em; }
+.otd-years { font-size: 13px; color: var(--accent); font-weight: 700; white-space: nowrap; }
 
 /* ===== write ===== */
 .ask-label { font-size: 13px; color: var(--muted); margin-bottom: 8px; }
@@ -257,6 +266,7 @@ button.ghost:hover { background: var(--surface-2); }
 <button id="fab" data-action="go-write" title="日記を書く" aria-label="日記を書く" hidden>✎</button>
 <div id="toast" role="status"></div>
 <input type="file" id="importFile" accept=".json,application/json" hidden>
+<input type="file" id="importTextFile" accept=".md,.txt,text/plain,text/markdown" hidden>
 <script>
 "use strict";
 
@@ -310,7 +320,8 @@ const state = {
   data: null,          // 永続データ（storage層で管理）
   view: "list",        // list | calendar | review | graph | settings | write | entry | search | lock
   entryId: null,
-  draft: { score: null, mood: null, date: null },  // write画面の選択（dateで過去日にさかのぼれる）
+  editingId: null,     // 既存日記の編集中はそのID（新規はnull）
+  draft: { score: null, mood: null, date: null, title: "", body: "" },  // write画面の下書き（dateで過去日にさかのぼれる）
   reviewKind: "week",  // week | month | year
   graphRange: 30,      // 日数。0=全期間
   generating: null,    // 生成中のdigestキー（"week:2026-07-06" 等）
@@ -478,6 +489,73 @@ function importJson(file) {
     toast("インポートしました");
   };
   reader.readAsText(file);
+}
+
+// 他アプリからの移行用: 日付見出しで区切られたテキスト/Markdownを日記として追加する。
+// 対応例: "## 2026-07-08（水）21:30 タイトル"（本アプリのMD） / "## 2026-07-08 タイトル" /
+//         "# 2026/7/8 タイトル" / "2026年7月8日" だけの行
+const DATE_HEAD_RE = /^(?:#{1,3}\s*)?(\d{4})[-/年](\d{1,2})[-/月](\d{1,2})日?(?:（[日月火水木金土]）)?\s*(?:(\d{1,2}):(\d{2}))?\s*(.*)$/;
+
+function parseTextImport(text) {
+  const found = [];
+  let cur = null;
+  for (const line of text.split(/\r?\n/)) {
+    const m = line.match(DATE_HEAD_RE);
+    const isHead = m && Number(m[2]) >= 1 && Number(m[2]) <= 12 && Number(m[3]) >= 1 && Number(m[3]) <= 31;
+    if (isHead) {
+      if (cur) found.push(cur);
+      cur = {
+        date: `${m[1]}-${pad(Number(m[2]))}-${pad(Number(m[3]))}`,
+        time: m[4] ? `${pad(Number(m[4]))}:${m[5]}` : "00:00",
+        title: (m[6] || "").trim(),
+        bodyLines: []
+      };
+    } else if (cur) {
+      cur.bodyLines.push(line);
+    }
+  }
+  if (cur) found.push(cur);
+  return found.map(f => {
+    // 本アプリのMDエクスポートのメタ行（"> 🙂 良い　8点…"）から気分・点数を復元する
+    let mood = null, score = null;
+    const bodyLines = [...f.bodyLines];
+    while (bodyLines.length && !bodyLines[0].trim()) bodyLines.shift();
+    if (bodyLines[0] && bodyLines[0].startsWith(">")) {
+      const metaLine = bodyLines[0];
+      const sm = metaLine.match(/(\d{1,2})点/);
+      if (sm) score = Math.min(SCORE_MAX, Number(sm[1]));
+      for (const mo of MOODS) if (metaLine.includes(mo.emoji)) { mood = mo.value; break; }
+      bodyLines.shift();
+    }
+    return { date: f.date, time: f.time, title: f.title, mood, score, body: bodyLines.join("\n").trim() };
+  }).filter(f => f.body || f.title);
+}
+
+function importTextEntries(text) {
+  const parsed = parseTextImport(text);
+  if (!parsed.length) {
+    toast("日付見出しが見つかりませんでした（例: ## 2026-07-08 タイトル）");
+    return;
+  }
+  let added = 0, skipped = 0;
+  for (const f of parsed) {
+    const dup = state.data.entries.some(e =>
+      e.date === f.date && e.title === f.title && e.body === f.body);
+    if (dup) { skipped++; continue; }
+    state.data.entries.push({
+      id: `${f.date}T${f.time}:00.${String(added % 1000).padStart(3, "0")}`,  // 同時刻複数件でも衝突しない
+      date: f.date,
+      weekday: WEEKDAYS[new Date(f.date + "T12:00:00").getDay()],
+      time: f.time,
+      title: f.title, body: f.body, mood: f.mood, score: f.score,
+      weather: null, location: state.data.settings.location.name, ai: null
+    });
+    added++;
+  }
+  saveData();
+  state.view = "list";
+  render();
+  toast(`${added}件追加しました${skipped ? `（重複${skipped}件はスキップ）` : ""}`);
 }
 
 // ===== 日時ユーティリティ =====
@@ -776,6 +854,26 @@ function entryCardHTML(e, opts = {}) {
   </button>`;
 }
 
+// On This Day: 過去の年の同じ日付の日記をリスト先頭に出す（振り返りのきっかけ）
+function onThisDayHTML() {
+  const today = todayStr();
+  const mmdd = today.slice(5);
+  const hits = sortedEntries().filter(e => e.date.slice(5) === mmdd && e.date < today);
+  if (!hits.length) return "";
+  const cards = hits.map(e => {
+    const years = Number(today.slice(0, 4)) - Number(e.date.slice(0, 4));
+    const title = e.title || e.body.slice(0, SNIPPET_TITLE_LEN);
+    return `<button class="entry-item" data-action="open-entry" data-id="${esc(e.id)}">
+      <span class="date-col"><span class="otd-years">${years}年前</span></span>
+      <span class="body-col">
+        <span class="title-row"><span class="title">${esc(title)}</span>${e.mood ? `<span class="mood-big">${moodOf(e.mood).emoji}</span>` : ""}</span>
+        <span class="snippet" style="-webkit-line-clamp:2">${esc(e.body)}</span>
+      </span>
+    </button>`;
+  }).join("");
+  return `<div class="otd-head">🕰 今日のこの日</div><div class="stack">${cards}</div>`;
+}
+
 function renderList() {
   const entries = sortedEntries();
   const bar = `<div class="topbar"><span style="width:40px"></span><h1>日記</h1>
@@ -794,7 +892,7 @@ function renderList() {
     const [y, m] = month.split("-");
     return `<div class="month-head">${y}年${Number(m)}月</div><div class="stack">${list.map(e => entryCardHTML(e)).join("")}</div>`;
   });
-  return bar + groups.join("");
+  return bar + onThisDayHTML() + groups.join("");
 }
 
 // --- 検索 ---
@@ -900,8 +998,8 @@ function renderWrite() {
         <div class="mood-row">${moodBtns}</div>
       </div>
       <div>
-        <input type="text" id="title" placeholder="タイトル" autocomplete="off">
-        <textarea id="body" placeholder="${isToday ? "今日" : "この日"}あったことを、そのまま書けばOK。"></textarea>
+        <input type="text" id="title" placeholder="タイトル" autocomplete="off" value="${esc(state.draft.title || "")}">
+        <textarea id="body" placeholder="${isToday ? "今日" : "この日"}あったことを、そのまま書けばOK。">${esc(state.draft.body || "")}</textarea>
       </div>
       <button class="primary" data-action="save">保存</button>
       <div class="hint">Ctrl+Enter でも保存できます・日付をタップするとカレンダーから選べます</div>
@@ -939,7 +1037,10 @@ function renderEntry() {
   return `
     <div class="topbar">
       <button class="icon-btn" data-action="back" title="戻る" aria-label="戻る">←</button>
-      <span style="width:40px"></span>
+      <span>
+        <button class="icon-btn" data-action="edit-entry" title="編集" aria-label="編集">✎</button>
+        <button class="icon-btn" data-action="delete-entry" title="削除" aria-label="削除">🗑</button>
+      </span>
     </div>
     <div class="entry-view">
       <div class="date-line">${esc(displayDate(e.date))}（${esc(e.weekday)}）${esc(e.time)}</div>
@@ -1156,7 +1257,8 @@ function renderSettings() {
         <button class="ghost" data-action="export-json">JSONでエクスポート</button>
         <button class="ghost" data-action="export-md">Markdownでエクスポート</button>
         <button class="ghost" data-action="import">JSONからインポート（全置き換え）</button>
-        <div class="label">iPhoneでは「共有してバックアップ」→「ファイルに保存」でiCloud Driveに保存できます</div>
+        <button class="ghost" data-action="import-text">テキスト/Markdownから追加インポート（他アプリの移行）</button>
+        <div class="label">iPhoneでは「共有してバックアップ」→「ファイルに保存」でiCloud Driveに保存できます。他アプリからの移行は「## 2026-07-08 タイトル」のような日付見出しのテキストに対応</div>
       </div>
     </div>`;
 }
@@ -1195,14 +1297,41 @@ function backToList() {
 
 function leaveWriteSafely() {
   const body = document.getElementById("body");
-  if (body && body.value.trim() && !confirm("書きかけの内容を破棄しますか？")) return;
-  backToList();
+  const original = state.editingId ? (findEntry(state.editingId) || {}).body : "";
+  const dirty = body && body.value.trim() && body.value.trim() !== (original || "").trim();
+  if (dirty && !confirm("書きかけの内容を破棄しますか？")) return;
+  if (state.editingId) {
+    // 編集をやめたら元のentry表示に戻る
+    const id = state.editingId;
+    state.editingId = null;
+    state.view = "entry"; state.entryId = id; render();
+  } else {
+    backToList();
+  }
 }
 
 function handleSave() {
   const title = document.getElementById("title").value.trim();
   const body = document.getElementById("body").value.trim();
   if (!body) { toast("本文が空です"); return; }
+  if (state.editingId) {
+    const e = findEntry(state.editingId);
+    state.editingId = null;
+    if (e) {
+      const dateChanged = e.date !== state.draft.date;
+      e.title = title; e.body = body; e.mood = state.draft.mood; e.score = state.draft.score;
+      if (dateChanged) {
+        e.date = state.draft.date;
+        e.weekday = WEEKDAYS[new Date(e.date + "T12:00:00").getDay()];
+        e.id = `${e.date}T${e.id.split("T")[1]}`;  // 並び順はIDに依存するため日付部分を差し替える
+        e.weather = null;  // 天気は元の日付のもの。日付が変わったら意味を失う
+      }
+      saveData();
+      state.view = "entry"; state.entryId = e.id; render();
+      toast("更新しました");
+      return;
+    }
+  }
   saveEntry(title, body, state.draft.mood, state.draft.score, state.draft.date);
   backToList();
   toast("保存しました");
@@ -1216,7 +1345,28 @@ document.addEventListener("click", e => {
     if (state.view === "write") { leaveWriteSafely(); if (state.view === "write") return; }
     state.view = el.dataset.view; state.entryId = null; render();
   }
-  else if (a === "go-write") { state.draft = { score: null, mood: null, date: todayStr() }; state.view = "write"; render(); }
+  else if (a === "go-write") {
+    state.editingId = null;
+    state.draft = { score: null, mood: null, date: todayStr(), title: "", body: "" };
+    state.view = "write"; render();
+  }
+  else if (a === "edit-entry") {
+    const e2 = findEntry(state.entryId);
+    if (e2) {
+      state.editingId = e2.id;
+      state.draft = { score: e2.score, mood: e2.mood, date: e2.date, title: e2.title, body: e2.body };
+      state.view = "write"; render();
+    }
+  }
+  else if (a === "delete-entry") {
+    const e2 = findEntry(state.entryId);
+    if (e2 && confirm(`${displayDate(e2.date)}の日記を削除しますか？`)) {
+      state.data.entries = state.data.entries.filter(x => x.id !== e2.id);
+      saveData();
+      backToList();
+      toast("削除しました");
+    }
+  }
   else if (a === "back") { state.view === "write" ? leaveWriteSafely() : backToList(); }
   else if (a === "open-entry") { state.entryFrom = state.view; state.view = "entry"; state.entryId = el.dataset.id; render(); }
   else if (a === "save") { handleSave(); }
@@ -1283,6 +1433,7 @@ document.addEventListener("click", e => {
   else if (a === "export-json") { exportJson(); }
   else if (a === "export-md") { exportMarkdown(); }
   else if (a === "import") { document.getElementById("importFile").click(); }
+  else if (a === "import-text") { document.getElementById("importTextFile").click(); }
 });
 
 // write画面の入力値（title/body）を消さずに気分・点数ボタンだけ更新する
@@ -1332,6 +1483,16 @@ document.getElementById("importFile").addEventListener("change", e => {
   e.target.value = "";
 });
 
+document.getElementById("importTextFile").addEventListener("change", e => {
+  const file = e.target.files[0];
+  if (file) {
+    const reader = new FileReader();
+    reader.onload = () => importTextEntries(String(reader.result));
+    reader.readAsText(file);
+  }
+  e.target.value = "";
+});
+
 // ===== 起動 =====
 state.data = loadData();
 // マイグレーションした場合だけ書き戻す。パース不能な壊れたデータは上書きしない
@@ -1342,6 +1503,10 @@ try {
 applyTheme();
 if (state.data.settings.passcodeHash) state.view = "lock";
 render();
+// PWA（オフライン起動）用。ローカルファイル起動(file://)ではSWは使えないのでスキップ
+if ("serviceWorker" in navigator && location.protocol === "https:") {
+  navigator.serviceWorker.register("./sw.js").catch(() => {});
+}
 </script>
 </body>
 </html>
