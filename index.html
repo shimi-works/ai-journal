@@ -39,6 +39,8 @@ body {
 button { font-family: inherit; }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .muted { color: var(--muted); }
+svg.icn { vertical-align: -0.18em; flex-shrink: 0; }
+.meta-row .icn { vertical-align: -0.25em; }
 
 /* ===== 共通部品 ===== */
 .topbar { display: flex; align-items: center; justify-content: space-between; padding: 8px 0 16px; }
@@ -96,7 +98,7 @@ button.ghost:hover { background: var(--surface-2); }
 .body-col { flex: 1; min-width: 0; }
 .title-row { display: flex; align-items: flex-start; gap: 8px; }
 .title-row .title { flex: 1; font-size: 18px; font-weight: 700; line-height: 1.5; }
-.title-row .mood-big { font-size: 22px; line-height: 1.4; }
+.title-row .mood-big { line-height: 1.4; padding-top: 2px; }
 .snippet {
   font-size: 14.5px; color: #b9bdc4; margin-top: 4px;
   display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
@@ -117,7 +119,8 @@ button.ghost:hover { background: var(--surface-2); }
 .score-row button.active { background: var(--accent); border-color: var(--accent); color: #0d0f13; font-weight: 700; }
 .mood-row { display: flex; gap: 8px; }
 .mood-row button {
-  flex: 1; padding: 10px 0; font-size: 26px; border-radius: var(--radius);
+  flex: 1; padding: 10px 0 8px; border-radius: var(--radius);
+  display: flex; flex-direction: column; align-items: center; gap: 4px;
   background: var(--surface); border: 1px solid var(--border); cursor: pointer;
   transition: background 180ms ease, border-color 180ms ease, transform 180ms ease;
 }
@@ -275,14 +278,16 @@ button.ghost:hover { background: var(--surface-2); }
   padding: 8px 14px; border-radius: 999px; display: flex; flex-direction: column; align-items: center; gap: 2px;
   white-space: nowrap; transition: background 180ms ease, color 180ms ease;
 }
-#nav button .ico { font-size: 18px; }
+#nav button .ico { height: 20px; display: flex; align-items: center; }
 #nav button.active { background: var(--surface-2); color: var(--text); }
 #fab {
   position: fixed; right: calc(50% - 300px + 24px); bottom: 96px; width: 56px; height: 56px;
-  border-radius: 50%; border: none; background: var(--accent); color: #0d0f13; font-size: 22px;
+  border-radius: 50%; border: none; background: var(--accent); color: #0d0f13;
+  display: flex; align-items: center; justify-content: center;
   cursor: pointer; z-index: 10; box-shadow: 0 4px 16px rgba(0,0,0,0.4);
   transition: filter 180ms ease, transform 180ms ease;
 }
+#fab[hidden] { display: none; }
 @media (max-width: 632px) { #fab { right: 24px; } }
 #fab:hover { filter: brightness(1.1); }
 #fab:active { transform: scale(0.95); }
@@ -298,13 +303,13 @@ button.ghost:hover { background: var(--surface-2); }
 <body>
 <div id="app"></div>
 <nav id="nav" hidden>
-  <button data-action="nav" data-view="list"><span class="ico">☰</span>リスト</button>
-  <button data-action="nav" data-view="calendar"><span class="ico">📅</span>カレンダー</button>
-  <button data-action="nav" data-view="review"><span class="ico">📖</span>振り返り</button>
-  <button data-action="nav" data-view="graph"><span class="ico">📈</span>グラフ</button>
-  <button data-action="nav" data-view="settings"><span class="ico">⚙</span>設定</button>
+  <button data-action="nav" data-view="list"><span class="ico"></span>リスト</button>
+  <button data-action="nav" data-view="calendar"><span class="ico"></span>カレンダー</button>
+  <button data-action="nav" data-view="review"><span class="ico"></span>振り返り</button>
+  <button data-action="nav" data-view="graph"><span class="ico"></span>グラフ</button>
+  <button data-action="nav" data-view="settings"><span class="ico"></span>設定</button>
 </nav>
-<button id="fab" data-action="go-write" title="日記を書く" aria-label="日記を書く" hidden>✎</button>
+<button id="fab" data-action="go-write" title="日記を書く" aria-label="日記を書く" hidden></button>
 <div id="toast" role="status"></div>
 <input type="file" id="importFile" accept=".json,application/json" hidden>
 <input type="file" id="importTextFile" accept=".md,.txt,text/plain,text/markdown" hidden>
@@ -1012,7 +1017,7 @@ function periodStats(entries) {
   return {
     count: entries.length,
     avgScore: avgScore == null ? null : Math.round(avgScore * 10) / 10,
-    avgMoodEmoji: avgMood == null ? null : moodOf(Math.round(avgMood)).emoji
+    avgMoodValue: avgMood == null ? null : Math.round(avgMood)
   };
 }
 
@@ -1050,6 +1055,72 @@ function saveEntry(title, body, mood, score, date) {
 function esc(s) {
   return String(s).replace(/[&<>"']/g, c =>
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+// ===== アイコン（OS絵文字は環境で見た目が揃わないので、線画SVGで統一） =====
+const ICON_PATHS = {
+  list: '<line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="14" y2="18"/>',
+  calendar: '<rect x="4" y="5" width="16" height="16" rx="2"/><line x1="4" y1="10" x2="20" y2="10"/><line x1="8" y1="3" x2="8" y2="7"/><line x1="16" y1="3" x2="16" y2="7"/>',
+  book: '<path d="M12 6.2C10.4 4.7 8.3 4.2 5.5 4.2v13.6c2.8 0 4.9.5 6.5 2 1.6-1.5 3.7-2 6.5-2V4.2c-2.8 0-4.9.5-6.5 2z"/><line x1="12" y1="6.6" x2="12" y2="19.4"/>',
+  refresh: '<path d="M20 12a8 8 0 1 1-2.3-5.6"/><polyline points="20 3.5 20 7.6 15.9 7.6"/>',
+  chart: '<polyline points="4 17 9.5 11.5 13.5 15 20 8"/><polyline points="15.4 8 20 8 20 12.6"/>',
+  sliders: '<line x1="5" y1="7" x2="19" y2="7"/><circle cx="10" cy="7" r="2.1"/><line x1="5" y1="12" x2="19" y2="12"/><circle cx="15" cy="12" r="2.1"/><line x1="5" y1="17" x2="19" y2="17"/><circle cx="8" cy="17" r="2.1"/>',
+  pen: '<path d="M16.8 4.4l2.8 2.8L8.8 18 4.6 19.4 6 15.2z"/>',
+  search: '<circle cx="11" cy="11" r="6.3"/><line x1="15.7" y1="15.7" x2="20" y2="20"/>',
+  help: '<circle cx="12" cy="12" r="8.8"/><path d="M9.6 9.3a2.5 2.5 0 1 1 3.7 2.3c-.8.4-1.3.9-1.3 1.9"/><line x1="12" y1="16.4" x2="12" y2="16.6"/>',
+  lock: '<rect x="5.5" y="11" width="13" height="9" rx="2"/><path d="M8.5 11V8a3.5 3.5 0 0 1 7 0v3"/>',
+  clock: '<circle cx="12" cy="12" r="8.4"/><polyline points="12 7.6 12 12 15 14"/>',
+  sparkles: '<path d="M11 5.5l1.4 3.4 3.4 1.4-3.4 1.4L11 15.1l-1.4-3.4-3.4-1.4 3.4-1.4z"/><path d="M18 14.5l.8 1.9 1.9.8-1.9.8-.8 1.9-.8-1.9-1.9-.8 1.9-.8z"/>',
+  pin: '<path d="M12 21s-6.5-5.5-6.5-10.3a6.5 6.5 0 0 1 13 0C18.5 15.5 12 21 12 21z"/><circle cx="12" cy="10.6" r="2.2"/>',
+  save: '<line x1="12" y1="4" x2="12" y2="14"/><polyline points="8.2 10.4 12 14.2 15.8 10.4"/><path d="M5 17v2.5h14V17"/>',
+  palette: '<path d="M12 3a9 9 0 1 0 0 18c1.2 0 2-.9 2-2 0-.5-.2-1-.5-1.3-.3-.4-.5-.8-.5-1.3 0-1.1.9-2 2-2h2.2A3.8 3.8 0 0 0 21 10.7 8.8 8.8 0 0 0 12 3z"/><circle cx="7.8" cy="10.6" r="1" fill="currentColor" stroke="none"/><circle cx="12" cy="7.4" r="1" fill="currentColor" stroke="none"/><circle cx="16.2" cy="10.6" r="1" fill="currentColor" stroke="none"/>'
+};
+function icon(name, size = 18, cls = "") {
+  return `<svg class="icn ${cls}" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICON_PATHS[name]}</svg>`;
+}
+
+// 気分の顔アイコン（色つき円 + 線画の表情）。テキスト書き出しでは従来どおりMOODS.emojiを使う
+const MOOD_FACE = {
+  4: { color: "#FFB454", feat: '<path d="M6.9 9.9q1.25-1.7 2.5 0"/><path d="M14.6 9.9q1.25-1.7 2.5 0"/><path d="M7.6 13.1c.9 2.7 7.9 2.7 8.8 0z" fill="#22252e" stroke="none"/>' },
+  3: { color: "#9ECE6A", feat: '<circle cx="8.4" cy="9.9" r="1.15" fill="#22252e" stroke="none"/><circle cx="15.6" cy="9.9" r="1.15" fill="#22252e" stroke="none"/><path d="M8.1 13.7c1.1 1.9 6.7 1.9 7.8 0"/>' },
+  2: { color: "#9AA3B2", feat: '<circle cx="8.4" cy="9.9" r="1.15" fill="#22252e" stroke="none"/><circle cx="15.6" cy="9.9" r="1.15" fill="#22252e" stroke="none"/><line x1="8.7" y1="14.4" x2="15.3" y2="14.4"/>' },
+  1: { color: "#7E8FDB", feat: '<circle cx="8.4" cy="10.2" r="1.15" fill="#22252e" stroke="none"/><circle cx="15.6" cy="10.2" r="1.15" fill="#22252e" stroke="none"/><path d="M8.1 15.6c1.1-1.9 6.7-1.9 7.8 0"/>' }
+};
+function moodFaceInner(value) {
+  const f = MOOD_FACE[value];
+  if (!f) return "";
+  return `<circle cx="12" cy="12" r="10" fill="${f.color}"/><g stroke="#22252e" stroke-width="1.8" fill="none" stroke-linecap="round">${f.feat}</g>`;
+}
+function moodSVG(value, size = 22) {
+  if (!MOOD_FACE[value]) return "";
+  return `<svg class="icn mood-icn" width="${size}" height="${size}" viewBox="0 0 24 24" role="img" aria-label="${esc(moodOf(value).name)}">${moodFaceInner(value)}</svg>`;
+}
+
+// 天気アイコン（WMOコード→種類→SVG）。テキスト書き出しでは従来どおりweatherEmoji()を使う
+function weatherKind(code) {
+  if (code <= 1) return "sun";
+  if (code === 2) return "part";
+  if (code === 3) return "cloud";
+  if (code === 45 || code === 48) return "fog";
+  if (code >= 95) return "storm";
+  if ((code >= 71 && code <= 77) || code === 85 || code === 86) return "snow";
+  if (code >= 51) return "rain";
+  return "cloud";
+}
+const SUN_RAYS = '<line x1="12" y1="2.8" x2="12" y2="5"/><line x1="12" y1="19" x2="12" y2="21.2"/><line x1="2.8" y1="12" x2="5" y2="12"/><line x1="19" y1="12" x2="21.2" y2="12"/><line x1="5.5" y1="5.5" x2="7.1" y2="7.1"/><line x1="16.9" y1="16.9" x2="18.5" y2="18.5"/><line x1="5.5" y1="18.5" x2="7.1" y2="16.9"/><line x1="16.9" y1="7.1" x2="18.5" y2="5.5"/>';
+const CLOUD_PATH = '<path d="M17.2 18.5H7.1a4 4 0 0 1-.9-7.9 5.4 5.4 0 0 1 10.5-1.2 4.2 4.2 0 0 1 .5 9.1z"/>';
+const CLOUD_HIGH = '<path d="M17.2 15.5H7.1a4 4 0 0 1-.9-7.9A5.4 5.4 0 0 1 16.7 6.4a4.2 4.2 0 0 1 .5 9.1z"/>';
+const WEATHER_ICON = {
+  sun: `<g stroke="#FFB454"><circle cx="12" cy="12" r="4.1"/>${SUN_RAYS}</g>`,
+  part: `<g stroke="#FFB454"><circle cx="8" cy="7.5" r="2.6"/><line x1="8" y1="2.6" x2="8" y2="3.9"/><line x1="3.1" y1="7.5" x2="4.4" y2="7.5"/><line x1="4.5" y1="4" x2="5.4" y2="4.9"/><line x1="11.5" y1="4" x2="10.6" y2="4.9"/></g><g stroke="#9AA3B2"><path d="M18.5 19.5h-8a3.4 3.4 0 0 1-.8-6.7 4.6 4.6 0 0 1 9-1 3.6 3.6 0 0 1-.2 7.7z"/></g>`,
+  cloud: `<g stroke="#9AA3B2">${CLOUD_PATH}</g>`,
+  fog: `<g stroke="#8A93A8">${CLOUD_HIGH}<line x1="7" y1="18.2" x2="17" y2="18.2"/><line x1="9" y1="21" x2="15" y2="21"/></g>`,
+  rain: `<g stroke="#7AA2F7">${CLOUD_HIGH}<line x1="9" y1="18" x2="8.3" y2="20.7"/><line x1="12.7" y1="18" x2="12" y2="20.7"/><line x1="16.4" y1="18" x2="15.7" y2="20.7"/></g>`,
+  snow: `<g stroke="#A8D8F0">${CLOUD_HIGH}<circle cx="8.8" cy="19.3" r="0.9" fill="#A8D8F0" stroke="none"/><circle cx="12.5" cy="20.6" r="0.9" fill="#A8D8F0" stroke="none"/><circle cx="16.2" cy="19.3" r="0.9" fill="#A8D8F0" stroke="none"/></g>`,
+  storm: `<g stroke="#9AA3B2">${CLOUD_HIGH}</g><path d="M12.8 15.5 10.2 19.6h2.1L11.2 22.8l4.3-5h-2.2l1.4-2.3z" fill="#FFD166"/>`
+};
+function weatherSVG(code, size = 16) {
+  return `<svg class="icn" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${WEATHER_ICON[weatherKind(code)]}</svg>`;
 }
 
 function render() {
@@ -1092,18 +1163,18 @@ function entryCardHTML(e, opts = {}) {
   const title = e.title || e.body.slice(0, SNIPPET_TITLE_LEN);
   const snippet = e.title ? e.body : e.body.slice(SNIPPET_TITLE_LEN);
   const mv = effectiveMood(e);
-  const mood = mv ? `<span class="mood-big">${moodOf(mv).emoji}</span>` : "";
-  const meta = [];
-  if (opts.withMonth) meta.push(displayDate(e.date));
+  const mood = mv ? `<span class="mood-big" data-mood="${mv}">${moodSVG(mv, 24)}</span>` : "";
+  const meta = [];   // 各要素はエスケープ済みHTML
+  if (opts.withMonth) meta.push(esc(displayDate(e.date)));
   if (e.score != null) meta.push(`${e.score}点`);
-  if (e.weather) meta.push(`${weatherEmoji(e.weather.code)} ${e.weather.temp}°C`);
-  if (e.ai && e.ai.tags.length) meta.push(e.ai.tags.slice(0, 3).join(" "));
+  if (e.weather) meta.push(`${weatherSVG(e.weather.code, 15)} ${e.weather.temp}°C`);
+  if (e.ai && e.ai.tags.length) meta.push(esc(e.ai.tags.slice(0, 3).join(" ")));
   return `<button class="entry-item" data-action="open-entry" data-id="${esc(e.id)}">
     <span class="date-col"><span class="dow ${dowClass}">${esc(e.weekday)}</span><span class="day">${day}</span><span class="time">${esc(e.time)}</span></span>
     <span class="body-col">
       <span class="title-row"><span class="title">${esc(title)}</span>${mood}</span>
       ${snippet ? `<span class="snippet">${esc(snippet)}</span>` : ""}
-      ${meta.length ? `<span class="meta-row">${meta.map(m2 => `<span>${esc(m2)}</span>`).join("")}</span>` : ""}
+      ${meta.length ? `<span class="meta-row">${meta.map(m2 => `<span>${m2}</span>`).join("")}</span>` : ""}
     </span>
   </button>`;
 }
@@ -1120,12 +1191,12 @@ function onThisDayHTML() {
     return `<button class="entry-item" data-action="open-entry" data-id="${esc(e.id)}">
       <span class="date-col"><span class="otd-years">${years}年前</span></span>
       <span class="body-col">
-        <span class="title-row"><span class="title">${esc(title)}</span>${effectiveMood(e) ? `<span class="mood-big">${moodOf(effectiveMood(e)).emoji}</span>` : ""}</span>
+        <span class="title-row"><span class="title">${esc(title)}</span>${effectiveMood(e) ? `<span class="mood-big">${moodSVG(effectiveMood(e), 22)}</span>` : ""}</span>
         <span class="snippet" style="-webkit-line-clamp:2">${esc(e.body)}</span>
       </span>
     </button>`;
   }).join("");
-  return `<div class="otd-head">🕰 今日のこの日</div><div class="stack">${cards}</div>`;
+  return `<div class="otd-head">${icon("clock", 14)} 今日のこの日</div><div class="stack">${cards}</div>`;
 }
 
 // バックアップリマインダー: 「未バックアップのまま7日/初回未実施」のときだけリストに出す
@@ -1143,7 +1214,7 @@ function backupBannerHTML() {
     ? `最後のバックアップから${dayDiff(s.lastBackupAt.slice(0, 10), todayStr())}日たっています（その後 ${diff} 件増加）`
     : `まだ一度もバックアップしていません（日記 ${n} 件）`;
   return `<div class="card" style="margin-bottom:16px">
-    <div class="muted" style="font-size:13px;margin-bottom:8px">💾 ${esc(msg)}</div>
+    <div class="muted" style="font-size:13px;margin-bottom:8px">${icon("save", 14)} ${esc(msg)}</div>
     <div style="display:flex;gap:8px">
       <button class="ghost" style="flex:1" data-action="share-backup">今すぐバックアップ</button>
       <button class="ghost" style="flex:1" data-action="backup-later">あとで</button>
@@ -1154,9 +1225,9 @@ function backupBannerHTML() {
 function renderList() {
   const entries = sortedEntries();
   const bar = `<div class="topbar">
-    <button class="search-lbl" data-action="go-help" title="ヘルプ" aria-label="ヘルプ">❓ ヘルプ</button>
+    <button class="search-lbl" data-action="go-help" title="ヘルプ" aria-label="ヘルプ">${icon("help", 14)} ヘルプ</button>
     <h1>日記</h1>
-    <button class="search-lbl" data-action="go-search" title="検索" aria-label="検索">🔍 単語検索</button></div>`;
+    <button class="search-lbl" data-action="go-search" title="検索" aria-label="検索">${icon("search", 14)} 単語検索</button></div>`;
   if (!entries.length) {
     return `${bar}<div class="empty-note">まだ日記がありません。<br>右下の ✎ から最初の1日を書いてみましょう。<br><br>使い方は左上の「❓ ヘルプ」からいつでも見られます。</div>`;
   }
@@ -1243,7 +1314,7 @@ function renderCalendar() {
     const today = date === todayStr() ? " today" : "";
     if (info) {
       const avg = average(info.moods);
-      const mark = avg != null ? `<span class="mark">${moodOf(Math.round(avg)).emoji}</span>` : `<span class="dot"></span>`;
+      const mark = avg != null ? `<span class="mark">${moodSVG(Math.round(avg), 17)}</span>` : `<span class="dot"></span>`;
       cells.push(`<button class="cal-cell has${today}" data-action="cal-day" data-date="${date}"><span>${d}</span>${mark}</button>`);
     } else {
       cells.push(`<span class="cal-cell${today}"><span>${d}</span></span>`);
@@ -1267,57 +1338,57 @@ function renderCalendar() {
 
 // --- ヘルプ ---
 function renderHelp() {
-  const sec = (icon, title, body, open) => `<details${open ? " open" : ""}>
-    <summary>${icon} ${title}</summary><div class="hbody">${body}</div></details>`;
+  const sec = (icn, title, body, open) => `<details${open ? " open" : ""}>
+    <summary><span style="color:var(--accent)">${icon(icn, 17)}</span> ${title}</summary><div class="hbody">${body}</div></details>`;
   return `
     <div class="topbar">
       <button class="icon-btn" data-action="back" title="戻る" aria-label="戻る">←</button>
       <h1>ヘルプ</h1><span style="width:40px"></span>
     </div>
     <div class="help-sec stack">
-      ${sec("📖", "このアプリについて", `
+      ${sec("book", "このアプリについて", `
         <p><b>「書くことはシンプルに、振り返ることはAIに。」</b></p>
         <p>あなたは3分で日記を書くだけ。保存すると裏でAIが<b>要約・タグ・気分の推定</b>を付け、
         週・月・年の振り返りまとめも作れます。日時・曜日・天気は自動で記録されます
         （天気の場所は初期設定で仙台。旅行のときは設定から変更できます）。</p>
         <p>AIやネットがなくても、書く・読む・検索・バックアップは全部動きます。データはこの端末の中だけに保存されます。</p>`, true)}
-      ${sec("✍️", "日記を書く", `
+      ${sec("pen", "日記を書く", `
         <p>右下の <b>✎ ボタン</b>から。書くのは<b>タイトル（なくてもOK）と本文だけ</b>。</p>
         <p>最初の「何点だった？」「気分は？」は<b>タップだけ・任意</b>です（もう一度タップで解除）。
         点数と気分を入れておくと、グラフやカレンダーが育ちます。</p>
         <p><b>過去の日の日記</b>も書けます: 上の日付をタップするとカレンダーが出るので、書きたい日を選ぶだけ（‹ ›で1日ずつも動けます）。</p>
         <p>キーボードなら <span class="key">Ctrl+Enter</span> で保存、<span class="key">Esc</span> で戻れます。</p>`)}
-      ${sec("📔", "読む・編集する・AIをやり直す", `
+      ${sec("list", "読む・編集する・AIをやり直す", `
         <p>リストのカードをタップすると日記が開きます。右上の <b>✎</b> で編集、<b>🗑</b> で削除。</p>
         <p>日記の下にAIの要約とタグが表示されます。付いていないときは「🤖 AIで要約・タグ付け」、
         気に入らなければ「AIをやり直す」でいつでも作り直せます。本文を編集すると自動で作り直されます。</p>`)}
-      ${sec("🔄", "振り返り（週・月・年のまとめ）", `
+      ${sec("refresh", "振り返り（週・月・年のまとめ）", `
         <p>「振り返り」タブで週間・月間・年間を切り替えると、期間ごとに件数・平均点・気分平均が並びます。</p>
         <p><b>「AIまとめを生成」</b>を押すと「今週は〜な週でした」という振り返り文をAIが書きます。
         日記が増えたら「再生成」で書き直せます。</p>
         <p>リストの上に出る<b>「🕰 今日のこの日」</b>は、1年前・2年前の同じ日の日記です。</p>`)}
-      ${sec("📅", "カレンダー・グラフ・検索", `
+      ${sec("chart", "カレンダー・グラフ・検索", `
         <p><b>カレンダー</b>: 書いた日に気分の絵文字が付きます。タップでその日の日記へ。</p>
         <p><b>グラフ</b>: 点数と気分の推移。30日/90日/全期間で切替、点にタッチすると日付と値が出ます。</p>
         <p><b>検索</b>: リスト右上の「🔍 単語検索」。言葉だけでなく<b>日付でも</b>探せます
         （「7月8日」「2026-07-08」「7月」など）。</p>`)}
-      ${sec("🤖", "AI機能を使う（初回設定）", `
+      ${sec("sparkles", "AI機能を使う（初回設定）", `
         <p>AIの要約・まとめには<b>Gemini APIキー（無料）</b>が必要です。</p>
         <p>設定 → Gemini APIキーの「Google AI Studio」リンクからキーを作成 → 貼り付けて保存。これだけです。</p>
         <p>無料枠の上限に当たったときは自動で別モデルに切り替わります。キーが無くても日記アプリとしては全部使えます。</p>`)}
-      ${sec("🗓", "Googleカレンダーの予定を挿入", `
+      ${sec("calendar", "Googleカレンダーの予定を挿入", `
         <p>設定の「Googleカレンダー連携」を済ませると、書く画面に<b>「📅 予定を挿入」</b>ボタンが出ます。
         タップするとその日の予定が本文の先頭に入るので、感想を書き足すだけで日記になります。</p>
         <p>初回設定の手順（Google Cloudで無料のクライアントIDを作る・約5分）は設定画面の中にあります。予定は読み取り専用です。</p>`)}
-      ${sec("💾", "バックアップ（大事）", `
+      ${sec("save", "バックアップ（大事）", `
         <p>データはこの端末のブラウザ内にあります。<b>iPhoneならホーム画面に追加</b>して使うと、オフラインでも開けてデータも守られやすくなります。</p>
         <p>設定 → バックアップから: <b>「共有してバックアップ」→「ファイルに保存」でiCloud Drive</b>に保存できます。JSON/Markdownのダウンロードも可能。</p>
         <p>バックアップしないまま7日たつと、リストにお知らせが出ます。復元は「JSONからインポート」、他の日記アプリからの引っ越しは「テキスト/Markdownから追加インポート」で。</p>`)}
-      ${sec("🔒", "パスワードロック", `
+      ${sec("lock", "パスワードロック", `
         <p>設定から<b>数字4桁</b>で設定できます。次からアプリを開くときに入力を求められます（4桁入れると自動で開きます）。</p>
         <p>忘れたら、ロック画面の「パスワードを忘れた場合」→「<b>リセット</b>」と入力すれば解除されます。<b>日記は消えません</b>。</p>
         <p>※覗き見防止の簡易ロックです（データそのものの暗号化ではありません）。</p>`)}
-      ${sec("🎨", "見た目を変える", `
+      ${sec("palette", "見た目を変える", `
         <p>設定から<b>テーマカラー6色・文字サイズ（小/標準/大）・フォント（ゴシック/明朝/丸ゴシック）</b>を変えられます。</p>`)}
     </div>`;
 }
@@ -1325,7 +1396,7 @@ function renderHelp() {
 // --- ロック ---
 function renderLock() {
   return `<div class="lock-view">
-    <span class="lock-icon">🔒</span>
+    <span class="lock-icon" style="color:var(--accent)">${icon("lock", 44)}</span>
     <input type="password" id="lockPass" placeholder="4桁の数字" inputmode="numeric" pattern="[0-9]*"
       maxlength="4" autocomplete="one-time-code">
     <button class="primary" data-action="unlock">開く</button>
@@ -1338,7 +1409,7 @@ function renderWrite() {
   const scoreBtns = Array.from({ length: SCORE_MAX }, (_, i) => i + 1).map(n =>
     `<button data-action="pick-score" data-score="${n}" class="${state.draft.score === n ? "active" : ""}">${n}</button>`).join("");
   const moodBtns = MOODS.map(m =>
-    `<button data-action="pick-mood" data-mood="${m.value}" class="${state.draft.mood === m.value ? "active" : ""}">${m.emoji}<span class="mood-name">${m.name}</span></button>`).join("");
+    `<button data-action="pick-mood" data-mood="${m.value}" class="${state.draft.mood === m.value ? "active" : ""}">${moodSVG(m.value, 30)}<span class="mood-name">${m.name}</span></button>`).join("");
   const isToday = state.draft.date === todayStr();
   return `
     <div class="topbar" style="position:relative">
@@ -1358,7 +1429,7 @@ function renderWrite() {
         <div class="ask-label">${isToday ? "今日" : "この日"}の気分は？</div>
         <div class="mood-row">${moodBtns}</div>
       </div>
-      ${state.data.settings.googleClientId ? `<button class="ghost" data-action="insert-events">📅 ${isToday ? "今日" : "この日"}の予定を挿入</button>` : ""}
+      ${state.data.settings.googleClientId ? `<button class="ghost" data-action="insert-events">${icon("calendar", 14)} ${isToday ? "今日" : "この日"}の予定を挿入</button>` : ""}
       <div>
         <input type="text" id="title" placeholder="タイトル" autocomplete="off" value="${esc(state.draft.title || "")}">
         <textarea id="body" placeholder="${isToday ? "今日" : "この日"}あったことを、そのまま書けばOK。">${esc(state.draft.body || "")}</textarea>
@@ -1420,17 +1491,17 @@ function renderDatePop() {
 // --- entry ---
 // AIセクション: 要約+タグ、未処理なら実行ボタン、処理中は表示
 function entryAiHTML(e) {
-  if (aiBusy.has(e.id)) return `<div class="entry-ai"><div class="muted" style="font-size:13px">🤖 AIが要約中…</div></div>`;
+  if (aiBusy.has(e.id)) return `<div class="entry-ai"><div class="muted" style="font-size:13px">${icon("sparkles", 14)} AIが要約中…</div></div>`;
   if (e.ai) {
     const tags = e.ai.tags.map(t => `<span class="badge">${esc(t)}</span>`).join("");
     return `<div class="entry-ai">
       ${e.ai.summary ? `<div class="ai-summary">${esc(e.ai.summary)}</div>` : ""}
       ${tags ? `<div class="badges" style="margin:8px 0 0">${tags}</div>` : ""}
-      <div class="digest-actions"><button class="ghost small" data-action="run-entry-ai">AIをやり直す</button></div>
+      <div class="digest-actions"><button class="ghost small" data-action="run-entry-ai">${icon("refresh", 13)} AIをやり直す</button></div>
     </div>`;
   }
   return `<div class="entry-ai"><div class="digest-actions">
-    <button class="ghost small" data-action="run-entry-ai">🤖 AIで要約・タグ付け</button>
+    <button class="ghost small" data-action="run-entry-ai">${icon("sparkles", 14)} AIで要約・タグ付け</button>
   </div></div>`;
 }
 
@@ -1438,10 +1509,12 @@ function renderEntry() {
   const e = findEntry(state.entryId);
   if (!e) { state.view = "list"; return renderList(); }
   const badges = [];
-  if (e.mood) badges.push(`<span class="badge">${moodOf(e.mood).emoji} ${esc(moodOf(e.mood).name)}</span>`);
-  else if (e.ai && e.ai.emotion) badges.push(`<span class="badge">${moodOf(e.ai.emotion).emoji} ${esc(moodOf(e.ai.emotion).name)}<span class="muted">（AI推定）</span></span>`);
+  if (e.mood) badges.push(`<span class="badge">${moodSVG(e.mood, 15)} ${esc(moodOf(e.mood).name)}</span>`);
+  else if (e.ai && e.ai.emotion) badges.push(`<span class="badge">${moodSVG(e.ai.emotion, 15)} ${esc(moodOf(e.ai.emotion).name)}<span class="muted">（AI推定）</span></span>`);
   if (e.score != null) badges.push(`<span class="badge">${e.score}点</span>`);
-  const weather = e.weather ? `${weatherLine(e.weather)}　@${esc(e.location)}` : `@${esc(e.location)}`;
+  const weather = e.weather
+    ? `${weatherSVG(e.weather.code, 15)} ${esc(e.weather.desc)} ${e.weather.temp}°C（最高${e.weather.tempMax} / 最低${e.weather.tempMin}）湿度${e.weather.humidity}%　@${esc(e.location)}`
+    : `@${esc(e.location)}`;
   return `
     <div class="topbar">
       <button class="icon-btn" data-action="back" title="戻る" aria-label="戻る">←</button>
@@ -1472,7 +1545,7 @@ function renderReview() {
     const st = periodStats(entries);
     const stats = [`日記${st.count}件`];
     if (st.avgScore != null) stats.push(`平均${st.avgScore}点`);
-    if (st.avgMoodEmoji) stats.push(`気分${st.avgMoodEmoji}`);
+    if (st.avgMoodValue) stats.push(`気分${moodSVG(st.avgMoodValue, 14)}`);
     const digest = state.data.digests[kind][key];
     const genKey = `${kind}:${key}`;
     let bodyHtml;
@@ -1488,7 +1561,7 @@ function renderReview() {
     }
     const current = isCurrentPeriod(kind, key) ? `<span class="muted">（${{ week: "今週", month: "今月", year: "今年" }[kind]}）</span>` : "";
     return `<div class="card">
-      <div class="period-head"><span class="label">${esc(periodLabel(kind, key))}${current}</span><span class="stats">${stats.map(esc).join("・")}</span></div>
+      <div class="period-head"><span class="label">${esc(periodLabel(kind, key))}${current}</span><span class="stats">${stats.join("・")}</span></div>
       ${bodyHtml}
     </div>`;
   }).join("");
@@ -1532,13 +1605,18 @@ function renderGraph() {
   const tiles = `<div class="tiles">
     <div class="tile"><div class="num">${st.count}</div><div class="cap">日記</div></div>
     <div class="tile"><div class="num">${st.avgScore != null ? st.avgScore : "–"}</div><div class="cap">平均点</div></div>
-    <div class="tile"><div class="num">${st.avgMoodEmoji || "–"}</div><div class="cap">気分の平均</div></div>
+    <div class="tile"><div class="num">${st.avgMoodValue ? moodSVG(st.avgMoodValue, 26) : "–"}</div><div class="cap">気分の平均</div></div>
   </div>`;
   const scoreChart = scorePts.length
     ? lineChartSVG(scorePts.map(p => ({ x: p.date, y: p.score })), { yMin: 0, yMax: 10, yTicks: [0, 5, 10], color: "var(--chart-score)", id: "score", fmt: v => `${Math.round(v * 10) / 10}点` })
     : `<div class="empty-note">点数を記録するとグラフが表示されます</div>`;
   const moodChart = moodPts.length
-    ? lineChartSVG(moodPts.map(p => ({ x: p.date, y: p.mood })), { yMin: 0.5, yMax: 4.5, yTicks: [1, 2, 3, 4], yLabel: v => (moodOf(v) || {}).emoji || "", color: "var(--chart-mood)", id: "mood", dotsOnly: true, fmt: v => (moodOf(Math.round(v)) || {}).emoji || "" })
+    ? lineChartSVG(moodPts.map(p => ({ x: p.date, y: p.mood })), {
+        yMin: 0.5, yMax: 4.5, yTicks: [1, 2, 3, 4],
+        yGlyph: (t, x, y) => `<g transform="translate(${(x - 16).toFixed(1)},${(y - 8).toFixed(1)}) scale(0.667)">${moodFaceInner(t)}</g>`,
+        color: "var(--chart-mood)", id: "mood", dotsOnly: true,
+        fmt: v => (moodOf(Math.round(v)) || {}).name || ""
+      })
     : `<div class="empty-note">気分を記録するとグラフが表示されます</div>`;
   return `
     <div class="topbar"><span style="width:40px"></span><h1>グラフ</h1><span style="width:40px"></span></div>
@@ -1561,9 +1639,10 @@ function lineChartSVG(points, opt) {
   const py = p => PAD_T + ih * (1 - (p.y - opt.yMin) / (opt.yMax - opt.yMin));
   const grid = opt.yTicks.map(t => {
     const y = PAD_T + ih * (1 - (t - opt.yMin) / (opt.yMax - opt.yMin));
-    const label = opt.yLabel ? opt.yLabel(t) : t;
-    return `<line x1="${PAD_L}" y1="${y}" x2="${W - PAD_R}" y2="${y}" stroke="var(--border)" stroke-width="1"/>
-      <text x="${PAD_L - 8}" y="${y + 4}" text-anchor="end" font-size="11" fill="var(--muted)">${label}</text>`;
+    const label = opt.yGlyph
+      ? opt.yGlyph(t, PAD_L - 8, y)
+      : `<text x="${PAD_L - 8}" y="${y + 4}" text-anchor="end" font-size="11" fill="var(--muted)">${t}</text>`;
+    return `<line x1="${PAD_L}" y1="${y}" x2="${W - PAD_R}" y2="${y}" stroke="var(--border)" stroke-width="1"/>${label}`;
   }).join("");
   // x軸ラベルは最初・中間・最後だけ（詰め込まない）
   const xIdx = [...new Set([0, Math.floor((points.length - 1) / 2), points.length - 1])];
@@ -1624,7 +1703,7 @@ function renderSettings() {
   return `
     <div class="topbar"><span style="width:40px"></span><h1>設定</h1><span style="width:40px"></span></div>
     <div class="settings-row">
-      <button class="ghost" data-action="go-help">❓ 使い方・ヘルプ</button>
+      <button class="ghost" data-action="go-help">${icon("help", 14)} 使い方・ヘルプ</button>
     </div>
     <div class="settings-row">
       <div class="label">テーマカラー</div>
@@ -1909,7 +1988,7 @@ document.addEventListener("click", e => {
         const hits = await searchLocations(name);
         box.innerHTML = hits.length
           ? hits.map(h => `<button class="ghost" data-action="pick-loc" data-name="${esc(h.name)}"
-              data-lat="${h.lat}" data-lon="${h.lon}">📍 ${esc(h.name)}${h.detail ? `<span class="muted">（${esc(h.detail)}）</span>` : ""}</button>`).join("")
+              data-lat="${h.lat}" data-lon="${h.lon}">${icon("pin", 14)} ${esc(h.name)}${h.detail ? `<span class="muted">（${esc(h.detail)}）</span>` : ""}</button>`).join("")
           : `<div class="muted" style="font-size:13px">「${esc(name)}」は見つかりませんでした。「◯◯市」やローマ字（Kyoto等）でも試してみてください</div>`;
       } catch (err) {
         box.innerHTML = "";
@@ -2021,6 +2100,12 @@ document.getElementById("importTextFile").addEventListener("change", e => {
 });
 
 // ===== 起動 =====
+// ナビとFABのアイコンを注入（静的HTML側に絵文字を残さない）
+const NAV_ICONS = { list: "list", calendar: "calendar", review: "refresh", graph: "chart", settings: "sliders" };
+for (const b of document.querySelectorAll("#nav button")) {
+  b.querySelector(".ico").innerHTML = icon(NAV_ICONS[b.dataset.view], 20);
+}
+document.getElementById("fab").innerHTML = icon("pen", 24);
 state.data = loadData();
 // マイグレーションした場合だけ書き戻す。パース不能な壊れたデータは上書きしない
 try {
