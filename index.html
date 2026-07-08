@@ -192,7 +192,7 @@ button.ghost:hover { background: var(--surface-2); }
 /* ===== settings ===== */
 .settings-row { padding: 16px 0; border-bottom: 1px solid var(--border); }
 .settings-row .label { font-size: 13px; color: var(--muted); margin-bottom: 8px; }
-.settings-row input[type="password"], .settings-row select {
+.settings-row input[type="password"], .settings-row input[type="text"], .settings-row select {
   width: 100%; padding: 12px; font-size: 14px; background: var(--surface);
   border: 1px solid var(--border); border-radius: var(--radius); color: var(--text); font-family: inherit;
 }
@@ -375,6 +375,7 @@ function defaultData() {
       location: { ...DEFAULT_LOCATION },
       passcodeHash: null,
       theme: { accent: "blue", font: "gothic", fontSize: "m" },
+      googleClientId: "",        // Googleカレンダー連携用OAuthクライアントID（本人が作成して貼る）
       lastBackupAt: null,        // 最後にエクスポート/共有した日時（ISO）
       lastBackupCount: 0,        // その時点の日記件数（未バックアップ増加分の表示用）
       backupSnoozedUntil: null   // リマインダーを「あとで」した場合の再表示日
@@ -404,6 +405,7 @@ function migrateData(d) {
   if (!("lastBackupAt" in d.settings)) d.settings.lastBackupAt = null;
   if (!("lastBackupCount" in d.settings)) d.settings.lastBackupCount = 0;
   if (!("backupSnoozedUntil" in d.settings)) d.settings.backupSnoozedUntil = null;
+  if (!("googleClientId" in d.settings)) d.settings.googleClientId = "";
   return d;
 }
 
@@ -688,6 +690,83 @@ async function fetchWeather(loc) {
     return null; // オフライン・タイムアウト時。日記の保存自体は妨げない
   } finally {
     clearTimeout(timer);
+  }
+}
+
+// ===== Googleカレンダー連携（読み取り専用・サーバー無しのブラウザ内OAuth） =====
+// GISライブラリは連携を使う瞬間だけ遅延ロードする（普段はCDN依存ゼロを保つ）
+const GCAL_SCOPE = "https://www.googleapis.com/auth/calendar.readonly";
+let gcalToken = null;   // { token, exp } メモリのみ（トークンは永続化しない）
+
+function loadGis() {
+  return new Promise((resolve, reject) => {
+    if (window.google && google.accounts && google.accounts.oauth2) return resolve();
+    const s = document.createElement("script");
+    s.src = "https://accounts.google.com/gsi/client";
+    s.onload = () => resolve();
+    s.onerror = () => reject(new Error("Google連携ライブラリを読み込めませんでした（オフライン？）"));
+    document.head.appendChild(s);
+  });
+}
+
+async function getGoogleToken() {
+  const clientId = state.data.settings.googleClientId;
+  if (!clientId) throw new Error("NO_CLIENT_ID");
+  if (gcalToken && Date.now() < gcalToken.exp) return gcalToken.token;
+  await loadGis();
+  return new Promise((resolve, reject) => {
+    const tc = google.accounts.oauth2.initTokenClient({
+      client_id: clientId,
+      scope: GCAL_SCOPE,
+      callback: r => {
+        if (r && r.access_token) {
+          gcalToken = { token: r.access_token, exp: Date.now() + (Number(r.expires_in || 3000) - 60) * 1000 };
+          resolve(r.access_token);
+        } else {
+          reject(new Error((r && r.error) || "認証に失敗しました"));
+        }
+      },
+      error_callback: () => reject(new Error("認証がキャンセルされました"))
+    });
+    tc.requestAccessToken();
+  });
+}
+
+async function fetchCalendarEvents(date, token) {
+  const timeMin = new Date(date + "T00:00:00").toISOString();
+  const timeMax = new Date(date + "T23:59:59").toISOString();
+  const url = "https://www.googleapis.com/calendar/v3/calendars/primary/events"
+    + "?singleEvents=true&orderBy=startTime&maxResults=20"
+    + `&timeMin=${encodeURIComponent(timeMin)}&timeMax=${encodeURIComponent(timeMax)}`;
+  const res = await fetch(url, { headers: { Authorization: "Bearer " + token } });
+  if (!res.ok) throw new Error(`カレンダーの取得に失敗しました (${res.status})`);
+  const j = await res.json();
+  return (j.items || []).filter(ev => ev.status !== "cancelled").map(ev => ({
+    time: ev.start && ev.start.dateTime ? ev.start.dateTime.slice(11, 16) : "終日",
+    title: ev.summary || "（無題の予定）"
+  }));
+}
+
+const EVENTS_HEADING = "【この日の予定】";
+
+async function insertCalendarEvents() {
+  const body = document.getElementById("body");
+  if (body.value.includes(EVENTS_HEADING)) { toast("すでに挿入済みです"); return; }
+  try {
+    const token = await getGoogleToken();
+    const events = await fetchCalendarEvents(state.draft.date, token);
+    if (!events.length) { toast("この日の予定は見つかりませんでした"); return; }
+    const block = `${EVENTS_HEADING}\n${events.map(ev => `・${ev.time} ${ev.title}`).join("\n")}\n\n`;
+    body.value = block + body.value;
+    body.focus();
+    body.setSelectionRange(body.value.length, body.value.length);
+  } catch (err) {
+    if (err.message === "NO_CLIENT_ID") {
+      toast("設定でGoogleクライアントIDを登録してください");
+      state.view = "settings"; render();
+    } else {
+      toast(err.message);
+    }
   }
 }
 
@@ -1165,6 +1244,7 @@ function renderWrite() {
         <div class="ask-label">${isToday ? "今日" : "この日"}の気分は？</div>
         <div class="mood-row">${moodBtns}</div>
       </div>
+      ${state.data.settings.googleClientId ? `<button class="ghost" data-action="insert-events">📅 ${isToday ? "今日" : "この日"}の予定を挿入</button>` : ""}
       <div>
         <input type="text" id="title" placeholder="タイトル" autocomplete="off" value="${esc(state.draft.title || "")}">
         <textarea id="body" placeholder="${isToday ? "今日" : "この日"}あったことを、そのまま書けばOK。">${esc(state.draft.body || "")}</textarea>
@@ -1464,6 +1544,24 @@ function renderSettings() {
       <select id="modelSelect">${models}</select>
     </div>
     <div class="settings-row">
+      <div class="label">Googleカレンダー連携${s.googleClientId ? "（設定済み）" : "（未設定）"}・書く画面に「予定を挿入」ボタンが出ます</div>
+      <div class="stack">
+        <input type="text" id="gcalClientId" value="${esc(s.googleClientId)}" placeholder="xxxx.apps.googleusercontent.com" autocomplete="off">
+        <button class="ghost" data-action="save-gcal">クライアントIDを保存</button>
+        <details>
+          <summary class="label" style="cursor:pointer">取得手順（初回のみ・約5分・無料）</summary>
+          <ol style="font-size:13px;color:var(--muted);padding-left:20px;line-height:1.9">
+            <li><a href="https://console.cloud.google.com/" target="_blank" rel="noopener">Google Cloud Console</a> でプロジェクトを作成</li>
+            <li>「APIとサービス → ライブラリ」で <b>Google Calendar API</b> を有効化</li>
+            <li>「OAuth同意画面」を外部で作成し、テストユーザーに自分のGmailを追加</li>
+            <li>「認証情報 → OAuthクライアントID → ウェブアプリケーション」を作成し、<br>承認済みのJavaScript生成元に <code>https://shimi-works.github.io</code> を追加</li>
+            <li>発行されたクライアントIDを上の欄に貼って保存</li>
+          </ol>
+        </details>
+        <div class="label">予定は読み取り専用（readonly）で、この端末のメモリにしか保持しません</div>
+      </div>
+    </div>
+    <div class="settings-row">
       <div class="label">場所（天気の取得地点）</div>
       <div>${esc(s.location.name)}</div>
     </div>
@@ -1665,6 +1763,13 @@ document.addEventListener("click", e => {
   else if (a === "set-font-size") { state.data.settings.theme.fontSize = el.dataset.size; saveData(); applyTheme(); render(); }
   else if (a === "set-font") { state.data.settings.theme.font = el.dataset.font; saveData(); applyTheme(); render(); }
   else if (a === "share-backup") { shareBackup(); }
+  else if (a === "insert-events") { insertCalendarEvents(); }
+  else if (a === "save-gcal") {
+    state.data.settings.googleClientId = document.getElementById("gcalClientId").value.trim();
+    gcalToken = null;   // ID変更時は取得済みトークンを破棄
+    saveData(); render();
+    toast(state.data.settings.googleClientId ? "クライアントIDを保存しました" : "クライアントIDを削除しました");
+  }
   else if (a === "backup-later") {
     state.data.settings.backupSnoozedUntil = addDays(todayStr(), BACKUP_SNOOZE_DAYS);
     saveData(); render();
