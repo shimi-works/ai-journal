@@ -374,7 +374,10 @@ function defaultData() {
       model: MODEL_POOL[0],
       location: { ...DEFAULT_LOCATION },
       passcodeHash: null,
-      theme: { accent: "blue", font: "gothic", fontSize: "m" }
+      theme: { accent: "blue", font: "gothic", fontSize: "m" },
+      lastBackupAt: null,        // 最後にエクスポート/共有した日時（ISO）
+      lastBackupCount: 0,        // その時点の日記件数（未バックアップ増加分の表示用）
+      backupSnoozedUntil: null   // リマインダーを「あとで」した場合の再表示日
     },
     entries: [],
     digests: { week: {}, month: {}, year: {} }
@@ -397,6 +400,10 @@ function migrateData(d) {
     if (!d.settings.theme) d.settings.theme = { accent: "blue", font: "gothic", fontSize: "m" };
     d.v = 3;
   }
+  // バックアップ記録（後付けフィールド。バージョンを上げず既定値で吸収）
+  if (!("lastBackupAt" in d.settings)) d.settings.lastBackupAt = null;
+  if (!("lastBackupCount" in d.settings)) d.settings.lastBackupCount = 0;
+  if (!("backupSnoozedUntil" in d.settings)) d.settings.backupSnoozedUntil = null;
   return d;
 }
 
@@ -476,9 +483,18 @@ function downloadFile(filename, text, mime) {
   URL.revokeObjectURL(a.href);
 }
 
+// バックアップした事実を記録する（リマインダーと「未保存N件」表示の基準）
+function markBackedUp() {
+  state.data.settings.lastBackupAt = `${todayStr()}T${fmtTime(new Date())}`;
+  state.data.settings.lastBackupCount = state.data.entries.length;
+  state.data.settings.backupSnoozedUntil = null;
+  saveData();
+}
+
 function exportJson() {
   downloadFile(`ai-journal-${todayStr()}.json`,
     JSON.stringify(state.data, null, 2), "application/json");
+  markBackedUp();
   toast("JSONをエクスポートしました");
 }
 
@@ -978,6 +994,29 @@ function onThisDayHTML() {
   return `<div class="otd-head">🕰 今日のこの日</div><div class="stack">${cards}</div>`;
 }
 
+// バックアップリマインダー: 「未バックアップのまま7日/初回未実施」のときだけリストに出す
+const BACKUP_REMIND_DAYS = 7;
+const BACKUP_SNOOZE_DAYS = 3;
+function backupBannerHTML() {
+  const s = state.data.settings;
+  const n = state.data.entries.length;
+  if (!n || n === s.lastBackupCount) return "";                                // 増えていなければ出さない
+  if (s.backupSnoozedUntil && todayStr() < s.backupSnoozedUntil) return "";
+  const stale = !s.lastBackupAt || dayDiff(s.lastBackupAt.slice(0, 10), todayStr()) >= BACKUP_REMIND_DAYS;
+  if (!stale) return "";
+  const diff = n - s.lastBackupCount;
+  const msg = s.lastBackupAt
+    ? `最後のバックアップから${dayDiff(s.lastBackupAt.slice(0, 10), todayStr())}日たっています（その後 ${diff} 件増加）`
+    : `まだ一度もバックアップしていません（日記 ${n} 件）`;
+  return `<div class="card" style="margin-bottom:16px">
+    <div class="muted" style="font-size:13px;margin-bottom:8px">💾 ${esc(msg)}</div>
+    <div style="display:flex;gap:8px">
+      <button class="ghost" style="flex:1" data-action="share-backup">今すぐバックアップ</button>
+      <button class="ghost" style="flex:1" data-action="backup-later">あとで</button>
+    </div>
+  </div>`;
+}
+
 function renderList() {
   const entries = sortedEntries();
   const bar = `<div class="topbar"><span style="width:96px"></span><h1>日記</h1>
@@ -996,7 +1035,7 @@ function renderList() {
     const [y, m] = month.split("-");
     return `<div class="month-head">${y}年${Number(m)}月</div><div class="stack">${list.map(e => entryCardHTML(e)).join("")}</div>`;
   });
-  return bar + onThisDayHTML() + groups.join("");
+  return bar + backupBannerHTML() + onThisDayHTML() + groups.join("");
 }
 
 // --- 検索 ---
@@ -1429,7 +1468,7 @@ function renderSettings() {
       <div>${esc(s.location.name)}</div>
     </div>
     <div class="settings-row">
-      <div class="label">バックアップ（現在 ${state.data.entries.length} 件）</div>
+      <div class="label">バックアップ（現在 ${state.data.entries.length} 件）・最終: ${s.lastBackupAt ? `${esc(s.lastBackupAt.replace("T", " "))}（${dayDiff(s.lastBackupAt.slice(0, 10), todayStr())}日前・${s.lastBackupCount}件時点）` : "まだ一度もありません"}</div>
       <div class="stack">
         <button class="ghost" data-action="share-backup">共有してバックアップ（iCloud等）</button>
         <button class="ghost" data-action="export-json">JSONでエクスポート</button>
@@ -1448,9 +1487,13 @@ async function shareBackup() {
   if (navigator.canShare && navigator.canShare({ files: [file] })) {
     try {
       await navigator.share({ files: [file], title: "AI Journal バックアップ" });
+      markBackedUp();
+      if (state.view === "settings" || state.view === "list") render();
     } catch (e) { /* ユーザーが共有をキャンセル */ }
   } else {
     downloadFile(`ai-journal-${todayStr()}.json`, json, "application/json");
+    markBackedUp();
+    if (state.view === "settings" || state.view === "list") render();
     toast("この環境は共有に非対応のためダウンロードしました");
   }
 }
@@ -1622,6 +1665,10 @@ document.addEventListener("click", e => {
   else if (a === "set-font-size") { state.data.settings.theme.fontSize = el.dataset.size; saveData(); applyTheme(); render(); }
   else if (a === "set-font") { state.data.settings.theme.font = el.dataset.font; saveData(); applyTheme(); render(); }
   else if (a === "share-backup") { shareBackup(); }
+  else if (a === "backup-later") {
+    state.data.settings.backupSnoozedUntil = addDays(todayStr(), BACKUP_SNOOZE_DAYS);
+    saveData(); render();
+  }
   else if (a === "pick-score") {
     const n = Number(el.dataset.score);
     state.draft.score = state.draft.score === n ? null : n;   // もう一度押すと解除
@@ -1714,6 +1761,8 @@ try {
 applyTheme();
 if (state.data.settings.passcodeHash) state.view = "lock";
 render();
+// ブラウザに「このサイトのデータを消さないで」と頼む（対応環境のみ。長期保存の保険）
+if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
 // PWA（オフライン起動）用。ローカルファイル起動(file://)ではSWは使えないのでスキップ
 if ("serviceWorker" in navigator && location.protocol === "https:") {
   navigator.serviceWorker.register("./sw.js").catch(() => {});

@@ -1,0 +1,312 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Journal — 技術説明・設計思想</title>
+<meta name="description" content="書くことはシンプルに、振り返ることはAIに。3分で書ける日記にAIが要約・タグ・感情・期間まとめを付ける日記PWA AI Journal の技術説明・設計思想。">
+</head>
+<body>
+<style>
+  :root{
+    --paper:#F5F5F0; --card:#FFFFFF; --ink:#1F2229; --sub:#666D7A;
+    --line:#E2E3DC; --accent:#33548F; --accent-soft:#E4EAF4;
+    --grow:#3F6B4C; --grow-soft:#E7EFE8;
+    --mincho:"Hiragino Mincho ProN","Yu Mincho",YuMincho,"Noto Serif JP",Georgia,serif;
+    --gothic:-apple-system,BlinkMacSystemFont,"Hiragino Kaku Gothic ProN","Yu Gothic",YuGothic,Meiryo,"Segoe UI",sans-serif;
+    --mono:"SFMono-Regular",ui-monospace,Menlo,Consolas,monospace;
+    --shadow:0 1px 2px rgba(30,40,60,.05),0 10px 30px rgba(30,40,60,.06);
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --paper:#0f1115; --card:#171a21; --ink:#E8E9EC; --sub:#8A8F98;
+      --line:#2A2F3A; --accent:#7AA2F7; --accent-soft:#1D2536;
+      --grow:#82B591; --grow-soft:#1C2620;
+      --shadow:0 1px 2px rgba(0,0,0,.3),0 12px 32px rgba(0,0,0,.35);
+    }
+  }
+  :root[data-theme="dark"]{
+    --paper:#0f1115; --card:#171a21; --ink:#E8E9EC; --sub:#8A8F98;
+    --line:#2A2F3A; --accent:#7AA2F7; --accent-soft:#1D2536;
+    --grow:#82B591; --grow-soft:#1C2620;
+    --shadow:0 1px 2px rgba(0,0,0,.3),0 12px 32px rgba(0,0,0,.35);
+  }
+  :root[data-theme="light"]{
+    --paper:#F5F5F0; --card:#FFFFFF; --ink:#1F2229; --sub:#666D7A;
+    --line:#E2E3DC; --accent:#33548F; --accent-soft:#E4EAF4;
+    --grow:#3F6B4C; --grow-soft:#E7EFE8;
+    --shadow:0 1px 2px rgba(30,40,60,.05),0 10px 30px rgba(30,40,60,.06);
+  }
+
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--gothic);
+    line-height:1.85;-webkit-font-smoothing:antialiased;font-feature-settings:"palt" 1}
+  .wrap{max-width:760px;margin:0 auto;padding:56px 22px 100px}
+  a{color:var(--accent);text-decoration:none;border-bottom:1px solid var(--accent-soft)}
+
+  .eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.22em;text-transform:uppercase;
+    color:var(--accent);margin:0 0 14px}
+  h1{font-family:var(--mincho);font-weight:600;font-size:clamp(34px,7vw,52px);line-height:1.15;
+    letter-spacing:.01em;margin:0 0 14px;text-wrap:balance}
+  .lede{font-family:var(--mincho);font-size:clamp(17px,2.6vw,21px);color:var(--ink);
+    line-height:1.7;margin:0 0 26px;text-wrap:balance}
+  .meta{display:flex;flex-wrap:wrap;gap:8px 10px;margin:0 0 8px}
+  .meta span{font-family:var(--mono);font-size:11.5px;letter-spacing:.04em;color:var(--sub);
+    border:1px solid var(--line);border-radius:20px;padding:5px 12px;white-space:nowrap}
+  .growline{margin:34px 0 4px}
+
+  section{margin-top:56px}
+  h2{font-family:var(--mincho);font-weight:600;font-size:clamp(22px,4vw,28px);
+    margin:0 0 6px;letter-spacing:.01em}
+  .sec-label{font-family:var(--mono);font-size:11px;letter-spacing:.2em;text-transform:uppercase;
+    color:var(--sub);margin:0 0 18px}
+  h2 + .sec-label{margin-top:-2px}
+  p{margin:0 0 16px;max-width:64ch}
+  strong{color:var(--accent);font-weight:600}
+  .word{font-family:var(--mincho);font-weight:600}
+
+  .decision{background:var(--card);border:1px solid var(--line);border-left:3px solid var(--accent);
+    border-radius:4px;padding:22px 24px;margin:16px 0;box-shadow:var(--shadow)}
+  .decision h3{font-family:var(--mincho);font-size:19px;font-weight:600;margin:2px 0 16px;letter-spacing:.01em}
+  dl{margin:0;display:grid;gap:12px}
+  dl > div{display:grid;grid-template-columns:64px 1fr;gap:14px;align-items:baseline}
+  dt{font-family:var(--mono);font-size:11px;letter-spacing:.12em;color:var(--accent);
+    text-transform:uppercase;padding-top:2px}
+  dd{margin:0;color:var(--ink)}
+  dd.q{color:var(--sub)}
+
+  .fmap{display:grid;grid-template-columns:1fr;gap:14px}
+  @media(min-width:620px){.fmap{grid-template-columns:1fr 1fr}}
+  .fgroup{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px 18px}
+  .fgroup .g{font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;
+    color:var(--sub);margin:0 0 10px}
+  .tags{display:flex;flex-wrap:wrap;gap:7px}
+  .tag{font-size:13px;background:var(--accent-soft);color:var(--ink);border-radius:20px;padding:5px 12px;line-height:1.4}
+
+  .stack{display:grid;gap:2px;background:var(--line);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+  .stack .row{display:grid;grid-template-columns:130px 1fr;gap:0;background:var(--card)}
+  .stack .k{font-family:var(--mono);font-size:12px;color:var(--accent);padding:12px 16px;letter-spacing:.03em}
+  .stack .v{padding:12px 16px;color:var(--ink);font-size:14.5px;border-left:1px solid var(--line)}
+  @media(max-width:520px){.stack .row{grid-template-columns:1fr}.stack .v{border-left:0;padding-top:0}}
+
+  .limit{background:var(--grow-soft);border:1px solid var(--line);border-radius:10px;padding:18px 20px}
+  .limit .g{font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--grow);margin:0 0 10px}
+  .limit ul{margin:0;padding-left:18px}
+  .limit li{margin:0 0 9px;color:var(--ink)}
+  .limit li:last-child{margin-bottom:0}
+  .limit b{color:var(--grow);font-weight:600}
+
+  .axis{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:26px 24px;box-shadow:var(--shadow)}
+  .axis .quote{font-family:var(--mincho);font-size:20px;line-height:1.7;margin:0 0 12px;color:var(--ink);text-wrap:balance}
+
+  footer{margin-top:64px;padding-top:20px;border-top:1px solid var(--line);
+    font-family:var(--mono);font-size:11.5px;color:var(--sub);letter-spacing:.04em}
+
+  @media (prefers-reduced-motion: no-preference){
+    .fade{opacity:0;transform:translateY(10px);animation:rise .7s ease forwards}
+    @keyframes rise{to{opacity:1;transform:none}}
+  }
+</style>
+
+<div class="wrap">
+
+  <header class="fade">
+    <p class="eyebrow">Case Study — PWA / LLM</p>
+    <h1><span class="word">AI Journal</span></h1>
+    <p class="lede">書くことはシンプルに、振り返ることはAIに。<br>
+      3分で書いた日記に要約・タグ・感情が付き、週・月・年の振り返りが自動で書き上がる。</p>
+    <div class="meta">
+      <span>制作 / 個人</span>
+      <span>形態 / 単一HTML・PWA・ノーサーバー</span>
+      <span>LLM / Google Gemini（無料枠）</span>
+      <span>保存 / localStorage</span>
+      <span>2026</span>
+    </div>
+
+    <svg class="growline" viewBox="0 0 720 90" preserveAspectRatio="none" width="100%" height="72" aria-hidden="true">
+      <polyline points="0,58 90,52 180,64 270,40 360,46 450,30 540,38 630,20 720,26"
+        style="fill:none;stroke:var(--accent);stroke-width:2;vector-effect:non-scaling-stroke"></polyline>
+      <polyline points="0,78 90,74 180,80 270,68 360,72 450,62 540,66 630,56 720,58"
+        style="fill:none;stroke:var(--grow);stroke-width:1.5;opacity:.6;vector-effect:non-scaling-stroke"></polyline>
+    </svg>
+  </header>
+
+  <section class="fade">
+    <h2>これは何か</h2>
+    <p class="sec-label">Overview</p>
+    <p>日記を書く画面には<strong>タイトル・本文・保存</strong>と、タップだけの点数・気分しかない。
+      保存した瞬間に裏でAIが動き、<strong>要約・タグ・感情推定</strong>と天気が自動で付く。
+      貯まった日記からは<span class="word">週・月・年の振り返り</span>が「今週は〜な週でした」という文章で生成され、
+      1年前の同じ日の日記が<span class="word">「今日のこの日」</span>として顔を出す。
+      「書くのは3分、振り返りは自動」を一つのPWAで完結させた。</p>
+    <p>目的は日記を書くことではなく、<strong>過去の自分を振り返りやすくすること</strong>。
+      整理・分析・要約という「続かない原因」をすべてAIに移し、人間には書くことだけを残した。</p>
+  </section>
+
+  <section class="fade">
+    <h2>設計思想</h2>
+    <p class="sec-label">Design Philosophy</p>
+
+    <p><strong>入力の少なさを機能より優先した。</strong>
+      日記アプリは機能を足すほど書くのが億劫になる。だから「シンプルさを絶対に崩さない」を最上位の要件に置き、
+      入力はタイトル（任意）・本文・2タップの点数と気分だけ。タグ付け・要約・感情記録・まとめ書きといった
+      <em>手間になる作業は全部AIの仕事</em>にした。手動入力を増やしたのは点数と気分だけで、
+      それも「AI推定より本人の申告が正しい」ものに限っている。</p>
+
+    <p><strong>AIなしでも日記アプリとして成立させた。</strong>
+      AI処理も天気取得も保存の<em>後追い</em>で走り、失敗しても日記は無傷。APIキーがなくても
+      書く・読む・検索する・エクスポートするは全部動く。ローカルファースト（データは端末の中、
+      ネットがなくても書ける）を守ることで、AIは「なければ困る依存」ではなく「あれば嬉しい増幅」になっている。</p>
+
+    <p><strong>振り返りを"体験"として設計した。</strong>
+      書き溜めた日記は、読み返されなければただのログになる。週・月・年のまとめ、気分と点数のグラフ、
+      書いた日が一目でわかるカレンダー、1年前の今日——どれも「開いたら過去の自分に出会ってしまう」
+      きっかけとして一貫させた。語彙ラボで「学習の継続」を設計したのと同じ手つきで、ここでは「記録と振り返りの循環」を設計している。</p>
+  </section>
+
+  <section class="fade">
+    <h2>技術構成</h2>
+    <p class="sec-label">Architecture</p>
+    <div class="stack">
+      <div class="row"><div class="k">配信形態</div><div class="v">単一HTMLファイル＋Service WorkerのPWA。ビルド工程・フレームワーク・依存パッケージなし。ホーム画面に追加すればオフラインでも起動する。</div></div>
+      <div class="row"><div class="k">永続化</div><div class="v">localStorage にバージョン付きスキーマで全データ。v1→v2→v3のチェーンマイグレーションで旧バックアップも読める。JSON/Markdown書き出し・Web Share APIでiCloud等へ共有・他アプリからのテキスト移行インポート。</div></div>
+      <div class="row"><div class="k">AI 呼び出し</div><div class="v">ブラウザから Gemini API を直接叩く（BYOK）。構造化出力（responseSchema）でJSONを安定生成し、無料枠の上限(429)では別モデルへ自動巡回。語彙ラボで確立した構成の再利用。</div></div>
+      <div class="row"><div class="k">外部データ</div><div class="v">天気は Open-Meteo（キー不要・無料）。保存時に非同期で取得し、当日の日記にだけ付与する。</div></div>
+      <div class="row"><div class="k">グラフ描画</div><div class="v">外部ライブラリなしのSVG手組み。点数の折れ線と気分のドットは、ダーク面上で色覚多様性の分離を検証した配色。</div></div>
+    </div>
+  </section>
+
+  <section class="fade">
+    <h2>主要な技術的判断</h2>
+    <p class="sec-label">Key Decisions — 課題 / 判断 / 理由</p>
+
+    <div class="decision">
+      <h3>AIを「裏方」に徹底して置く</h3>
+      <dl>
+        <div><dt>課題</dt><dd class="q">AI処理を保存と直列にすると、待ち時間と失敗がそのまま「書く体験」を壊す。無料枠のAPIは失敗が日常でもある。</dd></div>
+        <div><dt>判断</dt><dd>保存は即時にローカルへ確定し、<strong>要約・タグ・感情推定と天気は保存後に非同期で後追い付与</strong>。失敗したら黙って諦め（日記は無傷）、日記画面からいつでも手動でやり直せる。</dd></div>
+        <div><dt>理由</dt><dd>日記アプリの生命線は「書くのが一瞬で終わること」。AIの都合をユーザーに1秒も払わせない構造にした。</dd></div>
+      </dl>
+    </div>
+
+    <div class="decision">
+      <h3>手動入力とAI推定の優先順位</h3>
+      <dl>
+        <div><dt>課題</dt><dd class="q">気分はAIで推定できるが、本人の実感と食い違うことがある。かといって毎日必ず入力させると続かない。</dd></div>
+        <div><dt>判断</dt><dd>気分は<strong>手動4択（2タップ・任意）が正、AI推定は未入力の日だけの補完</strong>という優先順位に固定。グラフ・カレンダー・統計は全部この合成値を使い、AI由来には「AI推定」と明記する。</dd></div>
+        <div><dt>理由</dt><dd>「入力を増やさない」と「データの正しさ」は衝突する。優先順位を1本のルールに落とすことで、両方をほぼ満たした。</dd></div>
+      </dl>
+    </div>
+
+    <div class="decision">
+      <h3>無料枠に耐える、まとめ生成の階層設計</h3>
+      <dl>
+        <div><dt>課題</dt><dd class="q">週・月・年のまとめを本文全文から作ると、日記が増えるほどトークンが膨らみ、年間まとめは無料枠では成立しなくなる。</dd></div>
+        <div><dt>判断</dt><dd>まとめの素材を<strong>各日のAI要約</strong>にし、さらに<strong>年間まとめは月間まとめから生成する</strong>階層構造にした。1日→1要約、1ヶ月→1まとめ、と各段が定数サイズに畳まれていく。</dd></div>
+        <div><dt>理由</dt><dd>日記が10年分になっても、年間まとめの入力は「12個の月間まとめ」のまま。書き続けるほど破綻する設計を最初から避けた。</dd></div>
+      </dl>
+    </div>
+
+    <div class="decision">
+      <h3>iOS実機で判明した、日付選択の作り直し</h3>
+      <dl>
+        <div><dt>課題</dt><dd class="q">過去日にさかのぼって書く機能が、iPhoneでは「1日ずつ戻るしかない」状態だった。iOS Safariは <code>input[type=date]</code> の showPicker() に非対応で、隠したinputをクリックさせる迂回も効かない。</dd></div>
+        <div><dt>判断</dt><dd>ネイティブピッカーへの依存を捨て、<strong>月送り・未来日無効・外側タップで閉じる自前のカレンダーポップアップ</strong>に全面変更した。</dd></div>
+        <div><dt>理由</dt><dd>ヘッドレス検証では通っても実機で使えなければ意味がない。実機フィードバックが出た日のうちに、迂回ではなく根本から作り直した。</dd></div>
+      </dl>
+    </div>
+
+    <div class="decision">
+      <h3>「消えない」ことを機能として設計する</h3>
+      <dl>
+        <div><dt>課題</dt><dd class="q">日記は消えたら取り返しがつかない。しかしlocalStorageはブラウザ都合で消え得るし、バックアップは面倒だと実行されない。</dd></div>
+        <div><dt>判断</dt><dd>多層で守る——①ブラウザに永続化を要求（storage.persist）②最終バックアップ日時と未保存件数を常時記録③<strong>7日放置すると未保存件数つきのリマインダー</strong>④Web Share APIで共有シート→iCloud Driveへ1タップ保存⑤Markdownでも書き出せる将来も読める形式。</dd></div>
+        <div><dt>理由</dt><dd>「バックアップしてください」と書くのは機能ではない。忘れた頃に、1タップで済む形で差し出すところまでが設計。</dd></div>
+      </dl>
+    </div>
+
+    <div class="decision">
+      <h3>ヘッドレスブラウザによる回帰テストの自動化</h3>
+      <dl>
+        <div><dt>課題</dt><dd class="q">1日に何度も機能追加する開発ペースで、手動確認だけでは「動いていたものが壊れる」を防げない。実際に過去、編集ミスで起動不能のままpushした事故がある（別作品）。</dd></div>
+        <div><dt>判断</dt><dd>ヘッドレスブラウザで<strong>実クリックをdispatchするインタラクションテスト（50項目超）</strong>を毎回実行。保存・検索・ロック・マイグレーション・AI処理（APIはスタブ）・バックアップまで、ユーザー操作の粒度で回帰を検証してからpushする。</dd></div>
+        <div><dt>理由</dt><dd>個人開発こそ「自分しか気づけない」。テストをアプリ本体と同じ速度で育てることで、この開発ペースが維持できている。</dd></div>
+      </dl>
+    </div>
+  </section>
+
+  <section class="fade">
+    <h2>機能マップ</h2>
+    <p class="sec-label">Features</p>
+    <div class="fmap">
+      <div class="fgroup">
+        <p class="g">書く</p>
+        <div class="tags">
+          <span class="tag">タイトル+本文+保存だけの画面</span><span class="tag">点数1〜10（1タップ）</span>
+          <span class="tag">気分4択（1タップ）</span><span class="tag">日時・曜日 自動</span>
+          <span class="tag">天気 自動（Open-Meteo）</span><span class="tag">過去日にさかのぼり（カレンダー選択）</span>
+          <span class="tag">編集・削除</span>
+        </div>
+      </div>
+      <div class="fgroup">
+        <p class="g">AIが付ける</p>
+        <div class="tags">
+          <span class="tag">要約（1〜3文）</span><span class="tag">タグ3〜5個</span>
+          <span class="tag">感情推定（手動優先の補完）</span><span class="tag">週間・月間・年間まとめ</span>
+          <span class="tag">失敗しても日記は無傷</span><span class="tag">手動やり直し</span>
+        </div>
+      </div>
+      <div class="fgroup">
+        <p class="g">振り返る</p>
+        <div class="tags">
+          <span class="tag">今日のこの日（N年前の同日）</span><span class="tag">気分カレンダー</span>
+          <span class="tag">点数・気分の推移グラフ</span><span class="tag">期間統計（件数・平均点・気分平均）</span>
+          <span class="tag">単語検索</span><span class="tag">日付検索（7月8日/2026-07-08）</span>
+        </div>
+      </div>
+      <div class="fgroup">
+        <p class="g">土台</p>
+        <div class="tags">
+          <span class="tag">PWA（オフライン起動）</span><span class="tag">4桁PINロック＋忘れたとき救済</span>
+          <span class="tag">バックアップリマインダー</span><span class="tag">iCloud等へ共有保存</span>
+          <span class="tag">JSON/Markdown書き出し</span><span class="tag">他アプリからの移行インポート</span>
+          <span class="tag">テーマ6色・文字サイズ・フォント</span><span class="tag">スキーマ移行（v1→v3）</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="fade">
+    <h2>制約と割り切り</h2>
+    <p class="sec-label">Trade-offs</p>
+    <div class="limit">
+      <p class="g">承知の上のトレードオフ</p>
+      <ul>
+        <li><b>書くリマインド通知は載せていない</b>: 通知で書かせる日記は続かない、が設計判断。代わりに「開いたら1年前の今日に出会う」引力で開く理由を作っている。</li>
+        <li><b>APIキーは端末内保存＝個人利用が前提</b>: 不特定多数に配るならプロキシが要る。個人の日記帳という用途には、各自の鍵で無料のまま完結する方が合う。</li>
+        <li><b>パスワードは覗き見防止の簡易ロック</b>: データ自体の暗号化ではないとUIに明記し、忘れたときは日記を守る方向（データ保持でロック解除）に倒した。</li>
+        <li><b>週・月・年まとめは手動生成</b>: サーバーがないので「日曜の夜に自動で届く」はできない。開いたときに1タップで生成する形で代替（自動化は次の課題）。</li>
+      </ul>
+    </div>
+  </section>
+
+  <section class="fade">
+    <h2>この作品の位置づけ</h2>
+    <p class="sec-label">Context</p>
+    <div class="axis">
+      <p class="quote">「そのままでは続かないものを、続けたくなる体験に変える」</p>
+      <p>わたしの制作物に共通する軸は、学習と創作の<strong>体験</strong>を設計すること。
+        語彙ラボが「学習の継続」を、Chord Labが「創作の入口」を設計したのに対し、
+        AI Journalは<strong>「記録と振り返りの循環」</strong>を設計した3本目にあたる。
+        書く負荷を限界まで下げ、読み返す理由をAIと仕掛けで作る——
+        日記が続かない原因を一つずつ体験の設計で潰していった作品。</p>
+    </div>
+  </section>
+
+  <footer class="fade">
+    AI Journal — <a href="./index.html">アプリを開く</a> ／ 制作: しみ ／ 2026
+  </footer>
+
+</div>
+</body>
+</html>
