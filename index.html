@@ -217,6 +217,24 @@ button.ghost:hover { background: var(--surface-2); }
 }
 .search-box::placeholder { color: #565c68; }
 
+/* ===== ヘルプ ===== */
+.help-sec details {
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+}
+.help-sec summary {
+  cursor: pointer; padding: 14px 16px; font-weight: 600; font-size: 15px;
+  list-style: none; display: flex; gap: 10px; align-items: center;
+  transition: background 180ms ease; border-radius: var(--radius);
+}
+.help-sec summary::-webkit-details-marker { display: none; }
+.help-sec summary:hover { background: var(--surface-2); }
+.help-sec details[open] summary { border-bottom: 1px solid var(--border); border-radius: var(--radius) var(--radius) 0 0; }
+.help-sec .hbody { padding: 12px 16px 16px; font-size: 14.5px; color: #c8ccd4; line-height: 1.9; }
+.help-sec .hbody p { margin: 0 0 10px; }
+.help-sec .hbody p:last-child { margin-bottom: 0; }
+.help-sec .hbody b { color: var(--text); }
+.help-sec .hbody .key { background: var(--surface-2); border: 1px solid var(--border); border-radius: 6px; padding: 0 6px; font-size: 13px; }
+
 /* ===== カレンダー ===== */
 .cal-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
 .cal-head .cal-title { font-size: 17px; font-weight: 700; }
@@ -1002,7 +1020,7 @@ function render() {
   const views = {
     list: renderList, calendar: renderCalendar, review: renderReview, graph: renderGraph,
     settings: renderSettings, write: renderWrite, entry: renderEntry,
-    search: renderSearch, lock: renderLock
+    search: renderSearch, lock: renderLock, help: renderHelp
   };
   app.innerHTML = (views[state.view] || renderList)();
 
@@ -1098,10 +1116,12 @@ function backupBannerHTML() {
 
 function renderList() {
   const entries = sortedEntries();
-  const bar = `<div class="topbar"><span style="width:96px"></span><h1>日記</h1>
+  const bar = `<div class="topbar">
+    <button class="search-lbl" data-action="go-help" title="ヘルプ" aria-label="ヘルプ">❓ ヘルプ</button>
+    <h1>日記</h1>
     <button class="search-lbl" data-action="go-search" title="検索" aria-label="検索">🔍 単語検索</button></div>`;
   if (!entries.length) {
-    return `${bar}<div class="empty-note">まだ日記がありません。<br>右下の ✎ から最初の1日を書いてみましょう。</div>`;
+    return `${bar}<div class="empty-note">まだ日記がありません。<br>右下の ✎ から最初の1日を書いてみましょう。<br><br>使い方は左上の「❓ ヘルプ」からいつでも見られます。</div>`;
   }
   // 月ごとにグループ化してから描画する
   const byMonth = new Map();
@@ -1206,6 +1226,62 @@ function renderCalendar() {
       <div class="cal-grid">${cells.join("")}</div>
     </div>
     <div class="empty-note" style="font-size:12.5px">印のある日をタップすると日記が開きます</div>`;
+}
+
+// --- ヘルプ ---
+function renderHelp() {
+  const sec = (icon, title, body, open) => `<details${open ? " open" : ""}>
+    <summary>${icon} ${title}</summary><div class="hbody">${body}</div></details>`;
+  return `
+    <div class="topbar">
+      <button class="icon-btn" data-action="back" title="戻る" aria-label="戻る">←</button>
+      <h1>ヘルプ</h1><span style="width:40px"></span>
+    </div>
+    <div class="help-sec stack">
+      ${sec("📖", "このアプリについて", `
+        <p><b>「書くことはシンプルに、振り返ることはAIに。」</b></p>
+        <p>あなたは3分で日記を書くだけ。保存すると裏でAIが<b>要約・タグ・気分の推定</b>を付け、
+        週・月・年の振り返りまとめも作れます。日時・曜日・天気（仙台）は自動で記録されます。</p>
+        <p>AIやネットがなくても、書く・読む・検索・バックアップは全部動きます。データはこの端末の中だけに保存されます。</p>`, true)}
+      ${sec("✍️", "日記を書く", `
+        <p>右下の <b>✎ ボタン</b>から。書くのは<b>タイトル（なくてもOK）と本文だけ</b>。</p>
+        <p>最初の「何点だった？」「気分は？」は<b>タップだけ・任意</b>です（もう一度タップで解除）。
+        点数と気分を入れておくと、グラフやカレンダーが育ちます。</p>
+        <p><b>過去の日の日記</b>も書けます: 上の日付をタップするとカレンダーが出るので、書きたい日を選ぶだけ（‹ ›で1日ずつも動けます）。</p>
+        <p>キーボードなら <span class="key">Ctrl+Enter</span> で保存、<span class="key">Esc</span> で戻れます。</p>`)}
+      ${sec("📔", "読む・編集する・AIをやり直す", `
+        <p>リストのカードをタップすると日記が開きます。右上の <b>✎</b> で編集、<b>🗑</b> で削除。</p>
+        <p>日記の下にAIの要約とタグが表示されます。付いていないときは「🤖 AIで要約・タグ付け」、
+        気に入らなければ「AIをやり直す」でいつでも作り直せます。本文を編集すると自動で作り直されます。</p>`)}
+      ${sec("🔄", "振り返り（週・月・年のまとめ）", `
+        <p>「振り返り」タブで週間・月間・年間を切り替えると、期間ごとに件数・平均点・気分平均が並びます。</p>
+        <p><b>「AIまとめを生成」</b>を押すと「今週は〜な週でした」という振り返り文をAIが書きます。
+        日記が増えたら「再生成」で書き直せます。</p>
+        <p>リストの上に出る<b>「🕰 今日のこの日」</b>は、1年前・2年前の同じ日の日記です。</p>`)}
+      ${sec("📅", "カレンダー・グラフ・検索", `
+        <p><b>カレンダー</b>: 書いた日に気分の絵文字が付きます。タップでその日の日記へ。</p>
+        <p><b>グラフ</b>: 点数と気分の推移。30日/90日/全期間で切替、点にタッチすると日付と値が出ます。</p>
+        <p><b>検索</b>: リスト右上の「🔍 単語検索」。言葉だけでなく<b>日付でも</b>探せます
+        （「7月8日」「2026-07-08」「7月」など）。</p>`)}
+      ${sec("🤖", "AI機能を使う（初回設定）", `
+        <p>AIの要約・まとめには<b>Gemini APIキー（無料）</b>が必要です。</p>
+        <p>設定 → Gemini APIキーの「Google AI Studio」リンクからキーを作成 → 貼り付けて保存。これだけです。</p>
+        <p>無料枠の上限に当たったときは自動で別モデルに切り替わります。キーが無くても日記アプリとしては全部使えます。</p>`)}
+      ${sec("🗓", "Googleカレンダーの予定を挿入", `
+        <p>設定の「Googleカレンダー連携」を済ませると、書く画面に<b>「📅 予定を挿入」</b>ボタンが出ます。
+        タップするとその日の予定が本文の先頭に入るので、感想を書き足すだけで日記になります。</p>
+        <p>初回設定の手順（Google Cloudで無料のクライアントIDを作る・約5分）は設定画面の中にあります。予定は読み取り専用です。</p>`)}
+      ${sec("💾", "バックアップ（大事）", `
+        <p>データはこの端末のブラウザ内にあります。<b>iPhoneならホーム画面に追加</b>して使うと、オフラインでも開けてデータも守られやすくなります。</p>
+        <p>設定 → バックアップから: <b>「共有してバックアップ」→「ファイルに保存」でiCloud Drive</b>に保存できます。JSON/Markdownのダウンロードも可能。</p>
+        <p>バックアップしないまま7日たつと、リストにお知らせが出ます。復元は「JSONからインポート」、他の日記アプリからの引っ越しは「テキスト/Markdownから追加インポート」で。</p>`)}
+      ${sec("🔒", "パスワードロック", `
+        <p>設定から<b>数字4桁</b>で設定できます。次からアプリを開くときに入力を求められます（4桁入れると自動で開きます）。</p>
+        <p>忘れたら、ロック画面の「パスワードを忘れた場合」→「<b>リセット</b>」と入力すれば解除されます。<b>日記は消えません</b>。</p>
+        <p>※覗き見防止の簡易ロックです（データそのものの暗号化ではありません）。</p>`)}
+      ${sec("🎨", "見た目を変える", `
+        <p>設定から<b>テーマカラー6色・文字サイズ（小/標準/大）・フォント（ゴシック/明朝/丸ゴシック）</b>を変えられます。</p>`)}
+    </div>`;
 }
 
 // --- ロック ---
@@ -1510,6 +1586,9 @@ function renderSettings() {
   return `
     <div class="topbar"><span style="width:40px"></span><h1>設定</h1><span style="width:40px"></span></div>
     <div class="settings-row">
+      <button class="ghost" data-action="go-help">❓ 使い方・ヘルプ</button>
+    </div>
+    <div class="settings-row">
       <div class="label">テーマカラー</div>
       <div class="swatch-row">${swatches}</div>
     </div>
@@ -1721,6 +1800,7 @@ document.addEventListener("click", e => {
     document.getElementById("datePop").hidden = true;
   }
   else if (a === "go-search") { state.view = "search"; render(); }
+  else if (a === "go-help") { state.view = "help"; render(); }
   else if (a === "cal-move") {
     const [y, m] = state.calMonth.split("-").map(Number);
     const d = new Date(y, m - 1 + Number(el.dataset.delta), 1);
