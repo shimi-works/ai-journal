@@ -691,6 +691,30 @@ function weatherLine(w) {
   return `${weatherEmoji(w.code)} ${w.desc} ${w.temp}°C（最高${w.tempMax} / 最低${w.tempMin}）湿度${w.humidity}%`;
 }
 
+// 場所検索（Open-Meteoジオコーディング・キー不要）。旅行時の天気取得地点の変更に使う
+async function geocodeQuery(name) {
+  const url = "https://geocoding-api.open-meteo.com/v1/search"
+    + `?name=${encodeURIComponent(name)}&count=5&language=ja&format=json`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`場所の検索に失敗しました (${res.status})`);
+  return ((await res.json()).results) || [];
+}
+
+async function searchLocations(name) {
+  let results = await geocodeQuery(name);
+  // このAPIは「京都」「札幌」のような短縮形にヒットしないことがある。「◯◯市」で再検索する
+  // （「京都」は「都」で終わる等、接尾辞では除外できないので「市」以外は常にリトライする）
+  if (!results.length && /^[぀-ヿ一-鿿]+$/.test(name) && !name.endsWith("市")) {
+    results = await geocodeQuery(name + "市");
+  }
+  return results.map(r => ({
+    name: r.name,
+    detail: [r.admin1, r.country].filter(Boolean).join("・"),
+    lat: r.latitude,
+    lon: r.longitude
+  }));
+}
+
 async function fetchWeather(loc) {
   const url = "https://api.open-meteo.com/v1/forecast"
     + `?latitude=${loc.lat}&longitude=${loc.lon}`
@@ -1254,7 +1278,8 @@ function renderHelp() {
       ${sec("📖", "このアプリについて", `
         <p><b>「書くことはシンプルに、振り返ることはAIに。」</b></p>
         <p>あなたは3分で日記を書くだけ。保存すると裏でAIが<b>要約・タグ・気分の推定</b>を付け、
-        週・月・年の振り返りまとめも作れます。日時・曜日・天気（仙台）は自動で記録されます。</p>
+        週・月・年の振り返りまとめも作れます。日時・曜日・天気は自動で記録されます
+        （天気の場所は初期設定で仙台。旅行のときは設定から変更できます）。</p>
         <p>AIやネットがなくても、書く・読む・検索・バックアップは全部動きます。データはこの端末の中だけに保存されます。</p>`, true)}
       ${sec("✍️", "日記を書く", `
         <p>右下の <b>✎ ボタン</b>から。書くのは<b>タイトル（なくてもOK）と本文だけ</b>。</p>
@@ -1654,8 +1679,14 @@ function renderSettings() {
       </div>
     </div>
     <div class="settings-row">
-      <div class="label">場所（天気の取得地点）</div>
-      <div>${esc(s.location.name)}</div>
+      <div class="label">場所（天気の取得地点）・現在: <b>${esc(s.location.name)}</b></div>
+      <div class="stack">
+        <input type="text" id="locSearch" placeholder="都市名で検索（例: 京都、札幌、パリ）" autocomplete="off">
+        <button class="ghost" data-action="search-loc">場所を検索</button>
+        <div id="locResults" class="stack"></div>
+        ${s.location.name !== DEFAULT_LOCATION.name ? `<button class="ghost" data-action="reset-loc">${esc(DEFAULT_LOCATION.name)}に戻す</button>` : ""}
+        <div class="label">旅行中だけ変えて、帰ったら戻す使い方を想定しています</div>
+      </div>
     </div>
     <div class="settings-row">
       <div class="label">バックアップ（現在 ${state.data.entries.length} 件）・最終: ${s.lastBackupAt ? `${esc(s.lastBackupAt.replace("T", " "))}（${dayDiff(s.lastBackupAt.slice(0, 10), todayStr())}日前・${s.lastBackupCount}件時点）` : "まだ一度もありません"}</div>
@@ -1868,6 +1899,34 @@ document.addEventListener("click", e => {
   else if (a === "set-font-size") { state.data.settings.theme.fontSize = el.dataset.size; saveData(); applyTheme(); render(); }
   else if (a === "set-font") { state.data.settings.theme.font = el.dataset.font; saveData(); applyTheme(); render(); }
   else if (a === "share-backup") { shareBackup(); }
+  else if (a === "search-loc") {
+    (async () => {
+      const name = document.getElementById("locSearch").value.trim();
+      if (!name) { toast("都市名を入力してください"); return; }
+      const box = document.getElementById("locResults");
+      box.innerHTML = `<div class="muted" style="font-size:13px">検索中…</div>`;
+      try {
+        const hits = await searchLocations(name);
+        box.innerHTML = hits.length
+          ? hits.map(h => `<button class="ghost" data-action="pick-loc" data-name="${esc(h.name)}"
+              data-lat="${h.lat}" data-lon="${h.lon}">📍 ${esc(h.name)}${h.detail ? `<span class="muted">（${esc(h.detail)}）</span>` : ""}</button>`).join("")
+          : `<div class="muted" style="font-size:13px">「${esc(name)}」は見つかりませんでした。「◯◯市」やローマ字（Kyoto等）でも試してみてください</div>`;
+      } catch (err) {
+        box.innerHTML = "";
+        toast(err.message);
+      }
+    })();
+  }
+  else if (a === "pick-loc") {
+    state.data.settings.location = { name: el.dataset.name, lat: Number(el.dataset.lat), lon: Number(el.dataset.lon) };
+    saveData(); render();
+    toast(`場所を${el.dataset.name}に変更しました`);
+  }
+  else if (a === "reset-loc") {
+    state.data.settings.location = { ...DEFAULT_LOCATION };
+    saveData(); render();
+    toast(`場所を${DEFAULT_LOCATION.name}に戻しました`);
+  }
   else if (a === "insert-events") { insertCalendarEvents(); }
   else if (a === "save-gcal") {
     state.data.settings.googleClientId = document.getElementById("gcalClientId").value.trim();
