@@ -411,7 +411,8 @@ function migrateData(d) {
     }
     if (!d.settings.model) d.settings.model = MODEL_POOL[0];
     // v1のdigestsは weekly/monthly/yearly キーだった（中身は空のはずだが念のため引き継ぐ）
-    d.digests = { week: d.digests.weekly || {}, month: d.digests.monthly || {}, year: d.digests.yearly || {} };
+    const dg = d.digests || {};
+    d.digests = { week: dg.weekly || {}, month: dg.monthly || {}, year: dg.yearly || {} };
     d.v = 2;
   }
   if (d.v === 2) {
@@ -546,7 +547,8 @@ function importJson(file) {
       toast("JSONの読み込みに失敗しました");
       return;
     }
-    if (!parsed || !Number.isInteger(parsed.v) || parsed.v > SCHEMA_VERSION || !Array.isArray(parsed.entries)) {
+    if (!parsed || !Number.isInteger(parsed.v) || parsed.v > SCHEMA_VERSION || !Array.isArray(parsed.entries)
+        || !parsed.settings || typeof parsed.settings !== "object") {
       toast("AI Journalのエクスポートファイルではありません");
       return;
     }
@@ -609,12 +611,18 @@ function importTextEntries(text) {
     return;
   }
   let added = 0, skipped = 0;
+  const usedIds = new Set(state.data.entries.map(e => e.id));
   for (const f of parsed) {
     const dup = state.data.entries.some(e =>
       e.date === f.date && e.title === f.title && e.body === f.body);
     if (dup) { skipped++; continue; }
+    // 別ファイルを複数回インポートしても衝突しないよう、既存IDを避けてミリ秒部を採番する
+    let ms = added % 1000, id;
+    do { id = `${f.date}T${f.time}:00.${String(ms).padStart(3, "0")}`; ms = (ms + 1) % 1000; }
+    while (usedIds.has(id));
+    usedIds.add(id);
     state.data.entries.push({
-      id: `${f.date}T${f.time}:00.${String(added % 1000).padStart(3, "0")}`,  // 同時刻複数件でも衝突しない
+      id,
       date: f.date,
       weekday: WEEKDAYS[new Date(f.date + "T12:00:00").getDay()],
       time: f.time,
@@ -856,21 +864,25 @@ async function processEntryAI(entry, opts = {}) {
   }
   if (aiBusy.has(entry.id)) return;
   aiBusy.add(entry.id);
+  const promptBody = entry.body;   // 処理中に本文が編集されたら結果を捨てて作り直すための基準
   if (state.view === "entry" && state.entryId === entry.id) render();
   try {
     const r = await aiGenerate(entryAiPrompt(entry), ENTRY_AI_SCHEMA, 800);
-    const tags = (Array.isArray(r.tags) ? r.tags : [])
-      .map(t => String(t).trim().replace(/\s+/g, "")).filter(Boolean)
-      .map(t => t.startsWith("#") ? t : "#" + t)
-      .slice(0, AI_TAGS_MAX);
-    const n = Math.round(Number(r.emotion));
-    entry.ai = {
-      summary: String(r.summary || "").trim(),
-      tags,
-      emotion: n >= 1 && n <= 4 ? n : null,
-      createdAt: todayStr()
-    };
-    saveData();
+    // 生成中に本文が編集されていたら古い要約は捨てる（下で最新の本文でやり直す）
+    if (entry.body === promptBody) {
+      const tags = (Array.isArray(r.tags) ? r.tags : [])
+        .map(t => String(t).trim().replace(/\s+/g, "")).filter(Boolean)
+        .map(t => t.startsWith("#") ? t : "#" + t)
+        .slice(0, AI_TAGS_MAX);
+      const n = Math.round(Number(r.emotion));
+      entry.ai = {
+        summary: String(r.summary || "").trim(),
+        tags,
+        emotion: n >= 1 && n <= 4 ? n : null,
+        createdAt: todayStr()
+      };
+      saveData();
+    }
   } catch (err) {
     // 失敗しても日記は無傷。自動実行はconsoleに留め、手動実行だけユーザーに知らせる
     if (opts.manual) toast("AI処理に失敗: " + err.message);
@@ -879,6 +891,7 @@ async function processEntryAI(entry, opts = {}) {
     aiBusy.delete(entry.id);
     if ((state.view === "entry" && state.entryId === entry.id) || state.view === "list") render();
   }
+  if (entry.body !== promptBody) processEntryAI(entry, opts);
 }
 
 // ===== digest層（週間・月間・年間まとめ） =====
@@ -1695,8 +1708,11 @@ function backToList() {
 
 function leaveWriteSafely() {
   const body = document.getElementById("body");
-  const original = state.editingId ? (findEntry(state.editingId) || {}).body : "";
-  const dirty = body && body.value.trim() && body.value.trim() !== (original || "").trim();
+  const title = document.getElementById("title");
+  const orig = state.editingId ? (findEntry(state.editingId) || {}) : {};
+  // タイトルだけ書いた状態も「書きかけ」として扱う
+  const dirty = (body && body.value.trim() && body.value.trim() !== (orig.body || "").trim())
+    || (title && title.value.trim() && title.value.trim() !== (orig.title || "").trim());
   if (dirty && !confirm("書きかけの内容を破棄しますか？")) return;
   if (state.editingId) {
     // 編集をやめたら元のentry表示に戻る
@@ -1724,6 +1740,15 @@ function handleSave() {
         e.weekday = WEEKDAYS[new Date(e.date + "T12:00:00").getDay()];
         e.id = `${e.date}T${e.id.split("T")[1]}`;  // 並び順はIDに依存するため日付部分を差し替える
         e.weather = null;  // 天気は元の日付のもの。日付が変わったら意味を失う
+        if (e.date === todayStr()) {
+          // 今日に変えたなら新規保存と同じく天気を後追い取得する
+          fetchWeather(state.data.settings.location).then(w => {
+            if (!w || e.date !== todayStr()) return;
+            e.weather = w;
+            saveData();
+            if (state.view === "list" || (state.view === "entry" && state.entryId === e.id)) render();
+          });
+        }
       }
       if (contentChanged) {
         e.ai = null;   // 要約・タグは古い本文のもの。作り直す
