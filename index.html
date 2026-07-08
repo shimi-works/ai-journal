@@ -135,8 +135,19 @@ button.ghost:hover { background: var(--surface-2); }
 .write .hint { font-size: 12px; color: var(--muted); text-align: center; margin-top: 8px; }
 .topbar h1[data-action="pick-date"] { cursor: pointer; border-radius: 10px; padding: 4px 8px; transition: background 180ms ease; }
 .topbar h1[data-action="pick-date"]:hover { background: var(--surface); }
-/* 日付ピッカー本体は見せない（hidden属性だとshowPicker()が効かないので視覚的に隠す） */
-#datePicker { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; border: 0; padding: 0; }
+/* 日付選択ポップアップ（iOSでネイティブピッカーが開けないため自前カレンダー） */
+.date-pop {
+  position: absolute; top: 100%; left: 50%; transform: translateX(-50%);
+  width: min(360px, calc(100vw - 32px)); z-index: 30;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+}
+.date-pop[hidden] { display: none; }
+.date-pop .cal-cell { aspect-ratio: auto; padding: 8px 0; font-size: 13px; }
+.date-pop button.cal-cell { cursor: pointer; color: var(--text); border-radius: 10px; transition: background 180ms ease; }
+.date-pop button.cal-cell:hover { background: var(--surface-2); }
+.date-pop button.cal-cell.sel { background: var(--accent); color: #0d0f13; font-weight: 700; }
+.date-pop button.cal-cell.today { border-color: var(--accent); }
+.date-pop .cal-cell.off { opacity: 0.3; }
 .write input[type="text"]:focus-visible, .write textarea:focus-visible { outline: none; } /* 画面全体が編集領域なので枠は出さない */
 
 /* ===== entry ===== */
@@ -194,6 +205,12 @@ button.ghost:hover { background: var(--surface-2); }
 .swatch.active { border-color: var(--text); transform: scale(1.12); }
 
 /* ===== 検索 ===== */
+.search-lbl {
+  display: flex; align-items: center; gap: 4px; font-size: 12.5px; color: var(--muted);
+  background: none; border: 1px solid var(--border); border-radius: 999px; padding: 6px 12px;
+  cursor: pointer; white-space: nowrap; transition: color 180ms ease, background 180ms ease;
+}
+.search-lbl:hover { color: var(--text); background: var(--surface); }
 .search-box {
   width: 100%; padding: 12px 16px; font-size: 16px; background: var(--surface);
   border: 1px solid var(--border); border-radius: var(--radius); color: var(--text); font-family: inherit;
@@ -343,6 +360,7 @@ const state = {
   graphRange: 30,      // 日数。0=全期間
   generating: null,    // 生成中のdigestキー（"week:2026-07-06" 等）
   calMonth: null,      // カレンダー表示月 "YYYY-MM"
+  popMonth: null,      // write画面の日付選択ポップアップの表示月 "YYYY-MM"
   searchQuery: ""
 };
 
@@ -962,8 +980,8 @@ function onThisDayHTML() {
 
 function renderList() {
   const entries = sortedEntries();
-  const bar = `<div class="topbar"><span style="width:40px"></span><h1>日記</h1>
-    <button class="icon-btn" data-action="go-search" title="検索" aria-label="検索">🔍</button></div>`;
+  const bar = `<div class="topbar"><span style="width:96px"></span><h1>日記</h1>
+    <button class="search-lbl" data-action="go-search" title="検索" aria-label="検索">🔍 単語検索</button></div>`;
   if (!entries.length) {
     return `${bar}<div class="empty-note">まだ日記がありません。<br>右下の ✎ から最初の1日を書いてみましょう。</div>`;
   }
@@ -982,10 +1000,32 @@ function renderList() {
 }
 
 // --- 検索 ---
+// 日付らしい入力（2026-07-08 / 7月8日 / 7/8 / 2026年7月 / 7月）は日付検索としても解釈する
+function parseSearchDate(q) {
+  let m = q.match(/^(\d{4})[-/年](\d{1,2})[-/月](\d{1,2})日?$/);
+  if (m) return { type: "date", value: `${m[1]}-${pad(+m[2])}-${pad(+m[3])}` };
+  m = q.match(/^(\d{1,2})[/月](\d{1,2})日?$/);
+  if (m) return { type: "md", value: `${pad(+m[1])}-${pad(+m[2])}` };
+  m = q.match(/^(\d{4})[-/年](\d{1,2})月?$/);
+  if (m) return { type: "ym", value: `${m[1]}-${pad(+m[2])}` };
+  m = q.match(/^(\d{1,2})月$/);
+  if (m) return { type: "m", value: pad(+m[1]) };
+  return null;
+}
+
 function searchHits() {
   const q = state.searchQuery.trim().toLowerCase();
   if (!q) return null;
-  return sortedEntries().filter(e => (e.title + "\n" + e.body).toLowerCase().includes(q));
+  const d = parseSearchDate(q);
+  return sortedEntries().filter(e => {
+    if (d) {
+      if (d.type === "date" && e.date === d.value) return true;
+      if (d.type === "md" && e.date.slice(5) === d.value) return true;
+      if (d.type === "ym" && e.date.slice(0, 7) === d.value) return true;
+      if (d.type === "m" && e.date.slice(5, 7) === d.value) return true;
+    }
+    return (e.title + "\n" + e.body).toLowerCase().includes(q);
+  });
 }
 
 function searchResultsHTML() {
@@ -1000,9 +1040,9 @@ function renderSearch() {
   return `
     <div class="topbar">
       <button class="icon-btn" data-action="back" title="戻る" aria-label="戻る">←</button>
-      <h1>検索</h1><span style="width:40px"></span>
+      <h1>単語検索</h1><span style="width:40px"></span>
     </div>
-    <input type="search" id="searchBox" class="search-box" placeholder="日記を検索" value="${esc(state.searchQuery)}" autocomplete="off">
+    <input type="search" id="searchBox" class="search-box" placeholder="単語や日付で検索（例: 統計学、7月8日）" value="${esc(state.searchQuery)}" autocomplete="off">
     <div id="searchResults" style="margin-top:16px">${searchResultsHTML()}</div>`;
 }
 
@@ -1054,8 +1094,10 @@ function renderCalendar() {
 function renderLock() {
   return `<div class="lock-view">
     <span class="lock-icon">🔒</span>
-    <input type="password" id="lockPass" placeholder="パスワード" autocomplete="off">
+    <input type="password" id="lockPass" placeholder="4桁の数字" inputmode="numeric" pattern="[0-9]*"
+      maxlength="4" autocomplete="one-time-code">
     <button class="primary" data-action="unlock">開く</button>
+    <button class="ghost" style="width:240px" data-action="forgot-pass">パスワードを忘れた場合</button>
   </div>`;
 }
 
@@ -1067,13 +1109,13 @@ function renderWrite() {
     `<button data-action="pick-mood" data-mood="${m.value}" class="${state.draft.mood === m.value ? "active" : ""}">${m.emoji}<span class="mood-name">${m.name}</span></button>`).join("");
   const isToday = state.draft.date === todayStr();
   return `
-    <div class="topbar">
+    <div class="topbar" style="position:relative">
       <button class="icon-btn" data-action="back" title="戻る" aria-label="戻る">←</button>
       <button class="icon-btn" data-action="draft-day" data-delta="-1" title="前の日" aria-label="前の日">‹</button>
       <h1 id="writeDate" data-action="pick-date" title="タップして日付を選ぶ" role="button" tabindex="0">${esc(displayDate(state.draft.date))}</h1>
       <button class="icon-btn" data-action="draft-day" data-delta="1" title="次の日" aria-label="次の日" ${isToday ? "disabled" : ""}>›</button>
       <span style="width:40px"></span>
-      <input type="date" id="datePicker" value="${state.draft.date}" max="${todayStr()}" aria-hidden="true">
+      <div id="datePop" class="date-pop card" hidden></div>
     </div>
     <div class="write stack-lg">
       <div>
@@ -1099,7 +1141,6 @@ function setDraftDate(dateStr) {
   state.draft.date = dateStr;
   const isToday = dateStr === todayStr();
   document.getElementById("writeDate").textContent = displayDate(dateStr);
-  document.getElementById("datePicker").value = dateStr;
   document.querySelector("[data-action='draft-day'][data-delta='1']").disabled = isToday;
   const labels = document.querySelectorAll(".ask-label");
   if (labels.length >= 2) {
@@ -1111,6 +1152,36 @@ function setDraftDate(dateStr) {
 
 function shiftDraftDate(delta) {
   setDraftDate(addDays(state.draft.date, delta));
+}
+
+// 日付選択ポップアップ（未来日は選べない。月送りで過去の任意の日へ）
+function renderDatePop() {
+  const pop = document.getElementById("datePop");
+  const [y, m] = state.popMonth.split("-").map(Number);
+  const daysInMonth = new Date(y, m, 0).getDate();
+  const offset = new Date(y, m - 1, 1).getDay();  // 日曜始まり
+  const cells = [];
+  for (let i = 0; i < offset; i++) cells.push(`<span class="cal-cell"></span>`);
+  for (let d = 1; d <= daysInMonth; d++) {
+    const date = `${y}-${pad(m)}-${pad(d)}`;
+    if (date > todayStr()) {
+      cells.push(`<span class="cal-cell off"><span>${d}</span></span>`);
+    } else {
+      const cls = (date === state.draft.date ? " sel" : "") + (date === todayStr() ? " today" : "");
+      cells.push(`<button class="cal-cell${cls}" data-action="pop-day" data-date="${date}"><span>${d}</span></button>`);
+    }
+  }
+  const dow = WEEKDAYS.map(w =>
+    `<span class="${w === "日" ? "sun" : w === "土" ? "sat" : ""}">${w}</span>`).join("");
+  pop.innerHTML = `
+    <div class="cal-head">
+      <button class="icon-btn" data-action="pop-move" data-delta="-1" aria-label="前の月">‹</button>
+      <span class="cal-title">${y}年${m}月</span>
+      <button class="icon-btn" data-action="pop-move" data-delta="1" aria-label="次の月">›</button>
+    </div>
+    <div class="cal-dow">${dow}</div>
+    <div class="cal-grid">${cells.join("")}</div>`;
+  pop.hidden = false;
 }
 
 // --- entry ---
@@ -1334,10 +1405,11 @@ function renderSettings() {
     <div class="settings-row">
       <div class="label">パスワードロック${s.passcodeHash ? "（設定中）" : "（未設定）"}・アプリを開くときに必要になります</div>
       <div class="stack">
-        <input type="password" id="newPass" placeholder="${s.passcodeHash ? "新しいパスワード" : "パスワード"}" autocomplete="new-password">
+        <input type="password" id="newPass" placeholder="4桁の数字（例: 1234）" inputmode="numeric" pattern="[0-9]*"
+          maxlength="4" autocomplete="one-time-code">
         <button class="ghost" data-action="set-pass">${s.passcodeHash ? "パスワードを変更" : "パスワードを設定"}</button>
         ${s.passcodeHash ? `<button class="ghost" data-action="remove-pass">パスワードを解除</button>` : ""}
-        <div class="label">※簡易ロックです（データ自体は暗号化されません）。忘れるとブラウザのデータ削除以外で開けなくなるので注意</div>
+        <div class="label">※覗き見防止の簡易ロックです（データ自体は暗号化されません）。忘れてもロック画面の「パスワードを忘れた場合」から解除でき、日記は消えません</div>
       </div>
     </div>
     <div class="settings-row">
@@ -1449,6 +1521,11 @@ function handleSave() {
 }
 
 document.addEventListener("click", e => {
+  // 日付ポップアップは外側タップで閉じる
+  const pop = document.getElementById("datePop");
+  if (pop && !pop.hidden && !e.target.closest("#datePop") && !e.target.closest("[data-action='pick-date']")) {
+    pop.hidden = true;
+  }
   const el = e.target.closest("[data-action]");
   if (!el) return;
   const a = el.dataset.action;
@@ -1487,8 +1564,20 @@ document.addEventListener("click", e => {
   else if (a === "save") { handleSave(); }
   else if (a === "draft-day") { shiftDraftDate(Number(el.dataset.delta)); }
   else if (a === "pick-date") {
-    const p = document.getElementById("datePicker");
-    try { p.showPicker ? p.showPicker() : p.click(); } catch (_) { p.click(); }
+    const pop = document.getElementById("datePop");
+    if (!pop.hidden) { pop.hidden = true; return; }
+    state.popMonth = state.draft.date.slice(0, 7);
+    renderDatePop();
+  }
+  else if (a === "pop-move") {
+    const [y, m] = state.popMonth.split("-").map(Number);
+    const d = new Date(y, m - 1 + Number(el.dataset.delta), 1);
+    state.popMonth = `${d.getFullYear()}-${pad(d.getMonth() + 1)}`;
+    renderDatePop();
+  }
+  else if (a === "pop-day") {
+    setDraftDate(el.dataset.date);
+    document.getElementById("datePop").hidden = true;
   }
   else if (a === "go-search") { state.view = "search"; render(); }
   else if (a === "cal-move") {
@@ -1502,11 +1591,20 @@ document.addEventListener("click", e => {
     if (hit) { state.entryFrom = "calendar"; state.view = "entry"; state.entryId = hit.id; render(); }
   }
   else if (a === "unlock") { tryUnlock(); }
+  else if (a === "forgot-pass") {
+    // 覗き見防止の簡易ロックなので救済を優先する（誤タップで消えないよう合言葉入力）
+    const word = prompt("ロックを解除します（日記データは消えません）。\nよろしければ「リセット」と入力してください");
+    if (word !== "リセット") { if (word !== null) toast("入力が一致しません"); return; }
+    state.data.settings.passcodeHash = null;
+    saveData();
+    state.view = "list"; render();
+    toast("パスワードを解除しました。必要なら設定から再設定してください");
+  }
   else if (a === "set-pass") {
     (async () => {
       if (!await verifyCurrentPass()) return;
-      const v = document.getElementById("newPass").value;
-      if (!v) { toast("パスワードが空です"); return; }
+      const v = document.getElementById("newPass").value.trim();
+      if (!/^\d{4}$/.test(v)) { toast("パスワードは4桁の数字で入力してください"); return; }
       state.data.settings.passcodeHash = await hashText(v);
       saveData(); render();
       toast("パスワードを設定しました");
@@ -1564,10 +1662,6 @@ document.addEventListener("change", e => {
     state.data.settings.model = e.target.value;
     saveData();
     toast("モデルを変更しました");
-  } else if (e.target.id === "datePicker") {
-    const v = e.target.value;
-    if (v && v <= todayStr()) setDraftDate(v);
-    else e.target.value = state.draft.date;  // クリア・未来日は無効
   }
 });
 
@@ -1576,6 +1670,8 @@ document.addEventListener("input", e => {
   if (e.target.id === "searchBox") {
     state.searchQuery = e.target.value;
     document.getElementById("searchResults").innerHTML = searchResultsHTML();
+  } else if (e.target.id === "lockPass" && e.target.value.length === 4) {
+    tryUnlock();   // 4桁入れたら自動で判定（開くボタンを押す手間を省く）
   }
 });
 
