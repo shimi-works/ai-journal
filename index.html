@@ -146,6 +146,12 @@ button.ghost:hover { background: var(--surface-2); }
 .badge { background: var(--surface); border: 1px solid var(--border); border-radius: 999px; padding: 2px 12px; font-size: 13.5px; }
 .entry-view .weather-line { font-size: 13px; color: var(--muted); margin-bottom: 24px; }
 .entry-view .body { white-space: pre-wrap; font-size: 16px; }
+.entry-ai { margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--border); }
+.ai-summary {
+  background: var(--surface); border-left: 3px solid var(--accent); border-radius: 0 10px 10px 0;
+  padding: 8px 12px; font-size: 14.5px; color: #c8ccd4;
+}
+.meta-row { flex-wrap: wrap; row-gap: 2px; }
 
 /* ===== 振り返り ===== */
 .period-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 8px; }
@@ -303,6 +309,17 @@ const GRAPH_RANGES = [{ days: 30, label: "30日" }, { days: 90, label: "90日" }
 // Gemini（goi-labと同じ運用: 無料枠・429で自動モデル切替）
 const MODEL_POOL = ["gemini-2.5-flash-lite", "gemini-2.0-flash", "gemini-2.5-flash"];
 const DIGEST_SCHEMA = { type: "OBJECT", properties: { summary: { type: "STRING" } }, required: ["summary"] };
+const ENTRY_AI_SCHEMA = {
+  type: "OBJECT",
+  properties: {
+    summary: { type: "STRING" },
+    tags: { type: "ARRAY", items: { type: "STRING" } },
+    emotion: { type: "INTEGER" }
+  },
+  required: ["summary", "tags", "emotion"]
+};
+const ENTRY_AI_BODY_LIMIT = 2000;  // 1件処理の本文上限（無料枠トークン節約）
+const AI_TAGS_MAX = 5;
 
 // WMO weather code → 日本語（Open-Meteo仕様）
 const WMO_DESC = {
@@ -677,6 +694,62 @@ async function aiGenerate(prompt, schema, maxTokens = 1200) {
   }
 }
 
+// ===== 保存時AI処理（T-005: 要約・タグ・感情推定を1コールで） =====
+function entryAiPrompt(e) {
+  const given = [];
+  if (e.mood != null) given.push(`本人の気分入力: ${moodOf(e.mood).name}`);
+  if (e.score != null) given.push(`本人の点数入力: ${e.score}点/10点`);
+  return `あなたは日記アプリの整理アシスタントです。以下の日記1件を処理してください。
+
+【${e.date}（${e.weekday}）】${e.title || "（タイトルなし）"}
+${given.join("　")}
+本文:
+${e.body.slice(0, ENTRY_AI_BODY_LIMIT)}
+
+次の3つをJSONで返してください:
+- summary: 後で振り返ったとき一目で思い出せる1〜3文の要約。簡潔な常体（〜した）で、日記に書かれていることだけを使う
+- tags: 話題を表す日本語タグ3〜5個（例: "#大学" "#個人開発" "#読書"。#付き・短く）
+- emotion: この日の気分の推定を1〜4の整数で（4=とても良い, 3=良い, 2=ふつう, 1=いまいち）`;
+}
+
+const aiBusy = new Set();   // 処理中のentry.id（連打・二重実行防止）
+
+async function processEntryAI(entry, opts = {}) {
+  if (!state.data.settings.apiKey) {
+    // 自動実行時はAIなしで静かに成立させる（ローカルファースト）。手動時だけ設定へ誘導
+    if (opts.manual) {
+      toast("先に設定画面でGemini APIキーを登録してください");
+      state.view = "settings"; render();
+    }
+    return;
+  }
+  if (aiBusy.has(entry.id)) return;
+  aiBusy.add(entry.id);
+  if (state.view === "entry" && state.entryId === entry.id) render();
+  try {
+    const r = await aiGenerate(entryAiPrompt(entry), ENTRY_AI_SCHEMA, 800);
+    const tags = (Array.isArray(r.tags) ? r.tags : [])
+      .map(t => String(t).trim().replace(/\s+/g, "")).filter(Boolean)
+      .map(t => t.startsWith("#") ? t : "#" + t)
+      .slice(0, AI_TAGS_MAX);
+    const n = Math.round(Number(r.emotion));
+    entry.ai = {
+      summary: String(r.summary || "").trim(),
+      tags,
+      emotion: n >= 1 && n <= 4 ? n : null,
+      createdAt: todayStr()
+    };
+    saveData();
+  } catch (err) {
+    // 失敗しても日記は無傷。自動実行はconsoleに留め、手動実行だけユーザーに知らせる
+    if (opts.manual) toast("AI処理に失敗: " + err.message);
+    else console.warn("entry AI failed:", err.message);
+  } finally {
+    aiBusy.delete(entry.id);
+    if ((state.view === "entry" && state.entryId === entry.id) || state.view === "list") render();
+  }
+}
+
 // ===== digest層（週間・月間・年間まとめ） =====
 function digestPrompt(kind, key, entries) {
   const label = periodLabel(kind, key);
@@ -693,9 +766,12 @@ function digestPrompt(kind, key, entries) {
       : entries.map(e => `- ${e.date} ${e.title || e.body.slice(0, 60)}`).join("\n");
   } else {
     source = entries.map(e => {
-      const mood = e.mood ? `気分:${moodOf(e.mood).name}` : "";
+      const mv = effectiveMood(e);
+      const mood = mv ? `気分:${moodOf(mv).name}` : "";
       const score = e.score != null ? `${e.score}点` : "";
-      return `【${e.date}（${e.weekday}）${e.title || ""} ${mood} ${score}】\n${e.body.slice(0, DIGEST_BODY_LIMIT)}`;
+      // AI要約があればそれを素材にする（本文全文よりトークンが安定して少ない）
+      const text = e.ai && e.ai.summary ? e.ai.summary : e.body.slice(0, DIGEST_BODY_LIMIT);
+      return `【${e.date}（${e.weekday}）${e.title || ""} ${mood} ${score}】\n${text}`;
     }).join("\n\n");
   }
   return `あなたは私的な日記の振り返り文を書くアシスタントです。
@@ -750,13 +826,19 @@ function moodOf(value) {
   return MOODS.find(m => m.value === value) || null;
 }
 
+// 気分は手動入力が正。未入力のときだけAI推定（ai.emotion）で補完する
+function effectiveMood(e) {
+  if (e.mood != null) return e.mood;
+  return e.ai && e.ai.emotion != null ? e.ai.emotion : null;
+}
+
 function average(nums) {
   return nums.length ? nums.reduce((a, b) => a + b, 0) / nums.length : null;
 }
 
 function periodStats(entries) {
   const scores = entries.map(e => e.score).filter(v => v != null);
-  const moods = entries.map(e => e.mood).filter(v => v != null);
+  const moods = entries.map(effectiveMood).filter(v => v != null);
   const avgScore = average(scores);
   const avgMood = average(moods);
   return {
@@ -791,6 +873,8 @@ function saveEntry(title, body, mood, score, date) {
       if (state.view === "list" || (state.view === "entry" && state.entryId === entry.id)) render();
     });
   }
+  // AI処理（要約・タグ・感情推定）も裏で。キー未設定・失敗でも日記は成立する
+  processEntryAI(entry);
   return entry;
 }
 
@@ -839,11 +923,13 @@ function entryCardHTML(e, opts = {}) {
   const dowClass = e.weekday === "日" ? "sun" : e.weekday === "土" ? "sat" : "";
   const title = e.title || e.body.slice(0, SNIPPET_TITLE_LEN);
   const snippet = e.title ? e.body : e.body.slice(SNIPPET_TITLE_LEN);
-  const mood = e.mood ? `<span class="mood-big">${moodOf(e.mood).emoji}</span>` : "";
+  const mv = effectiveMood(e);
+  const mood = mv ? `<span class="mood-big">${moodOf(mv).emoji}</span>` : "";
   const meta = [];
   if (opts.withMonth) meta.push(displayDate(e.date));
   if (e.score != null) meta.push(`${e.score}点`);
   if (e.weather) meta.push(`${weatherEmoji(e.weather.code)} ${e.weather.temp}°C`);
+  if (e.ai && e.ai.tags.length) meta.push(e.ai.tags.slice(0, 3).join(" "));
   return `<button class="entry-item" data-action="open-entry" data-id="${esc(e.id)}">
     <span class="date-col"><span class="dow ${dowClass}">${esc(e.weekday)}</span><span class="day">${day}</span><span class="time">${esc(e.time)}</span></span>
     <span class="body-col">
@@ -866,7 +952,7 @@ function onThisDayHTML() {
     return `<button class="entry-item" data-action="open-entry" data-id="${esc(e.id)}">
       <span class="date-col"><span class="otd-years">${years}年前</span></span>
       <span class="body-col">
-        <span class="title-row"><span class="title">${esc(title)}</span>${e.mood ? `<span class="mood-big">${moodOf(e.mood).emoji}</span>` : ""}</span>
+        <span class="title-row"><span class="title">${esc(title)}</span>${effectiveMood(e) ? `<span class="mood-big">${moodOf(effectiveMood(e)).emoji}</span>` : ""}</span>
         <span class="snippet" style="-webkit-line-clamp:2">${esc(e.body)}</span>
       </span>
     </button>`;
@@ -931,7 +1017,8 @@ function renderCalendar() {
   for (const e of sortedEntries()) {
     if (e.date.slice(0, 7) !== state.calMonth) continue;
     if (!byDate.has(e.date)) byDate.set(e.date, { moods: [], latestId: e.id });
-    if (e.mood != null) byDate.get(e.date).moods.push(e.mood);
+    const mv = effectiveMood(e);
+    if (mv != null) byDate.get(e.date).moods.push(mv);
   }
   const cells = [];
   for (let i = 0; i < offset; i++) cells.push(`<span class="cal-cell"></span>`);
@@ -1027,11 +1114,28 @@ function shiftDraftDate(delta) {
 }
 
 // --- entry ---
+// AIセクション: 要約+タグ、未処理なら実行ボタン、処理中は表示
+function entryAiHTML(e) {
+  if (aiBusy.has(e.id)) return `<div class="entry-ai"><div class="muted" style="font-size:13px">🤖 AIが要約中…</div></div>`;
+  if (e.ai) {
+    const tags = e.ai.tags.map(t => `<span class="badge">${esc(t)}</span>`).join("");
+    return `<div class="entry-ai">
+      ${e.ai.summary ? `<div class="ai-summary">${esc(e.ai.summary)}</div>` : ""}
+      ${tags ? `<div class="badges" style="margin:8px 0 0">${tags}</div>` : ""}
+      <div class="digest-actions"><button class="ghost small" data-action="run-entry-ai">AIをやり直す</button></div>
+    </div>`;
+  }
+  return `<div class="entry-ai"><div class="digest-actions">
+    <button class="ghost small" data-action="run-entry-ai">🤖 AIで要約・タグ付け</button>
+  </div></div>`;
+}
+
 function renderEntry() {
   const e = findEntry(state.entryId);
   if (!e) { state.view = "list"; return renderList(); }
   const badges = [];
   if (e.mood) badges.push(`<span class="badge">${moodOf(e.mood).emoji} ${esc(moodOf(e.mood).name)}</span>`);
+  else if (e.ai && e.ai.emotion) badges.push(`<span class="badge">${moodOf(e.ai.emotion).emoji} ${esc(moodOf(e.ai.emotion).name)}<span class="muted">（AI推定）</span></span>`);
   if (e.score != null) badges.push(`<span class="badge">${e.score}点</span>`);
   const weather = e.weather ? `${weatherLine(e.weather)}　@${esc(e.location)}` : `@${esc(e.location)}`;
   return `
@@ -1048,6 +1152,7 @@ function renderEntry() {
       ${badges.length ? `<div class="badges">${badges.join("")}</div>` : ""}
       <div class="weather-line">${weather}</div>
       <div class="body">${esc(e.body)}</div>
+      ${entryAiHTML(e)}
     </div>`;
 }
 
@@ -1099,7 +1204,8 @@ function dailySeries() {
     if (!byDate.has(e.date)) byDate.set(e.date, { scores: [], moods: [] });
     const d = byDate.get(e.date);
     if (e.score != null) d.scores.push(e.score);
-    if (e.mood != null) d.moods.push(e.mood);
+    const mv = effectiveMood(e);
+    if (mv != null) d.moods.push(mv);
   }
   return [...byDate.entries()].sort((a, b) => a[0].localeCompare(b[0]))
     .map(([date, d]) => ({ date, score: average(d.scores), mood: average(d.moods) }));
@@ -1319,12 +1425,17 @@ function handleSave() {
     state.editingId = null;
     if (e) {
       const dateChanged = e.date !== state.draft.date;
+      const contentChanged = e.title !== title || e.body !== body;
       e.title = title; e.body = body; e.mood = state.draft.mood; e.score = state.draft.score;
       if (dateChanged) {
         e.date = state.draft.date;
         e.weekday = WEEKDAYS[new Date(e.date + "T12:00:00").getDay()];
         e.id = `${e.date}T${e.id.split("T")[1]}`;  // 並び順はIDに依存するため日付部分を差し替える
         e.weather = null;  // 天気は元の日付のもの。日付が変わったら意味を失う
+      }
+      if (contentChanged) {
+        e.ai = null;   // 要約・タグは古い本文のもの。作り直す
+        processEntryAI(e);
       }
       saveData();
       state.view = "entry"; state.entryId = e.id; render();
@@ -1357,6 +1468,10 @@ document.addEventListener("click", e => {
       state.draft = { score: e2.score, mood: e2.mood, date: e2.date, title: e2.title, body: e2.body };
       state.view = "write"; render();
     }
+  }
+  else if (a === "run-entry-ai") {
+    const e2 = findEntry(state.entryId);
+    if (e2) processEntryAI(e2, { manual: true });
   }
   else if (a === "delete-entry") {
     const e2 = findEntry(state.entryId);
