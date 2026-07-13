@@ -108,6 +108,32 @@ button.ghost:hover { background: var(--surface-2); }
 .otd-head { font-size: 13px; color: var(--muted); margin: 8px 0; letter-spacing: 0.06em; }
 .otd-years { font-size: 13px; color: var(--accent); font-weight: 700; white-space: nowrap; }
 
+/* ===== 継続（ストリーク） ===== */
+.streak-card { margin-bottom: 16px; }
+.streak-card .icn, .streak-note .icn { color: #ff9e64; }
+.streak-note { font-size: 12.5px; color: var(--muted); margin: 0 0 12px; display: flex; align-items: center; gap: 4px; }
+
+/* ===== ネタ帳 ===== */
+.topic-item { display: flex; align-items: center; gap: 10px; padding: 12px 14px; }
+.topic-item .topic-open {
+  flex: 1; min-width: 0; text-align: left; background: none; border: none; padding: 0;
+  color: var(--text); cursor: pointer; font-family: inherit; font-size: 14.5px; line-height: 1.6;
+}
+.topic-item .topic-date { display: block; font-size: 12px; color: var(--muted); margin-top: 2px; }
+.topic-item .bulb-mark { color: #FFD166; }
+.topic-check {
+  flex-shrink: 0; background: var(--surface-2); border: 1px solid var(--border); color: var(--muted);
+  border-radius: 999px; padding: 6px 12px; font-size: 12.5px; cursor: pointer;
+  transition: color 180ms ease, border-color 180ms ease;
+}
+.topic-check:hover { color: var(--text); border-color: var(--accent); }
+.topic-item.done .topic-open { text-decoration: line-through; color: var(--muted); }
+.ai-topics { margin-top: 8px; font-size: 13.5px; color: #c8ccd4; }
+.ai-topics .icn { color: #FFD166; }
+.topics-sec details { margin-top: 16px; }
+.topics-sec summary { cursor: pointer; font-size: 13px; color: var(--muted); list-style: none; }
+.topics-sec summary::-webkit-details-marker { display: none; }
+
 /* ===== write ===== */
 .ask-label { font-size: 13px; color: var(--muted); margin-bottom: 8px; }
 .score-row { display: flex; gap: 4px; }
@@ -275,9 +301,11 @@ button.ghost:hover { background: var(--surface-2); }
 #nav[hidden] { display: none; }  /* display:flexがhidden属性を上書きしないように */
 #nav button {
   border: none; background: none; color: var(--muted); font-size: 12px; cursor: pointer;
-  padding: 8px 14px; border-radius: 999px; display: flex; flex-direction: column; align-items: center; gap: 2px;
+  padding: 8px 11px; border-radius: 999px; display: flex; flex-direction: column; align-items: center; gap: 2px;
   white-space: nowrap; transition: background 180ms ease, color 180ms ease;
 }
+/* タブが6つになったので、狭い画面では詰めてはみ出しを防ぐ */
+@media (max-width: 430px) { #nav button { padding: 8px 7px; font-size: 11px; } }
 #nav button .ico { height: 20px; display: flex; align-items: center; }
 #nav button.active { background: var(--surface-2); color: var(--text); }
 #fab {
@@ -307,6 +335,7 @@ button.ghost:hover { background: var(--surface-2); }
   <button data-action="nav" data-view="calendar"><span class="ico"></span>カレンダー</button>
   <button data-action="nav" data-view="review"><span class="ico"></span>振り返り</button>
   <button data-action="nav" data-view="graph"><span class="ico"></span>グラフ</button>
+  <button data-action="nav" data-view="topics"><span class="ico"></span>ネタ帳</button>
   <button data-action="nav" data-view="settings"><span class="ico"></span>設定</button>
 </nav>
 <button id="fab" data-action="go-write" title="日記を書く" aria-label="日記を書く" hidden></button>
@@ -354,12 +383,17 @@ const ENTRY_AI_SCHEMA = {
   properties: {
     summary: { type: "STRING" },
     tags: { type: "ARRAY", items: { type: "STRING" } },
+    topics: { type: "ARRAY", items: { type: "STRING" } },
     emotion: { type: "INTEGER" }
   },
-  required: ["summary", "tags", "emotion"]
+  required: ["summary", "tags", "topics", "emotion"]
 };
 const ENTRY_AI_BODY_LIMIT = 2000;  // 1件処理の本文上限（無料枠トークン節約）
 const AI_TAGS_MAX = 5;
+const AI_TOPICS_MAX = 2;           // 1日あたりの会話ネタ上限
+const TOPIC_BATCH = 10;            // ネタ帳の一括抽出で一度に処理する件数（無料枠を守る）
+// 保存時にお祝いする連続日数の節目
+const STREAK_MILESTONES = [3, 5, 7, 10, 14, 21, 30, 50, 66, 100, 150, 200, 300, 365];
 
 // WMO weather code → 日本語（Open-Meteo仕様）
 const WMO_DESC = {
@@ -384,7 +418,8 @@ const state = {
   generating: null,    // 生成中のdigestキー（"week:2026-07-06" 等）
   calMonth: null,      // カレンダー表示月 "YYYY-MM"
   popMonth: null,      // write画面の日付選択ポップアップの表示月 "YYYY-MM"
-  searchQuery: ""
+  searchQuery: "",
+  extracting: null     // ネタ帳の一括抽出中 { done, total }（連打防止と進捗表示）
 };
 
 // ===== storage層 =====
@@ -405,7 +440,8 @@ function defaultData() {
       backupSnoozedUntil: null   // リマインダーを「あとで」した場合の再表示日
     },
     entries: [],
-    digests: { week: {}, month: {}, year: {} }
+    digests: { week: {}, month: {}, year: {} },
+    usedTopics: {}   // ネタ帳の「話した」チェック。キーは `${entry.id}#${index}` → 記録日
   };
 }
 
@@ -432,6 +468,7 @@ function migrateData(d) {
   if (!("backupSnoozedUntil" in d.settings)) d.settings.backupSnoozedUntil = null;
   if (!("googleClientId" in d.settings)) d.settings.googleClientId = "";
   if (!("reminderTime" in d.settings)) d.settings.reminderTime = "21:00";
+  if (!d.usedTopics || typeof d.usedTopics !== "object") d.usedTopics = {};
   return d;
 }
 
@@ -876,9 +913,10 @@ ${given.join("　")}
 本文:
 ${e.body.slice(0, ENTRY_AI_BODY_LIMIT)}
 
-次の3つをJSONで返してください:
+次の4つをJSONで返してください:
 - summary: 後で振り返ったとき一目で思い出せる1〜3文の要約。簡潔な常体（〜した）で、日記に書かれていることだけを使う
 - tags: 話題を表す日本語タグ3〜5個（例: "#大学" "#個人開発" "#読書"。#付き・短く）
+- topics: この日記から拾える「人との会話のネタ」を0〜2個。友達や家族につい話したくなる出来事・発見・面白い話を、そのまま話し始められる一言（40字以内）にする。日記に書かれていることだけを使い、無ければ空配列
 - emotion: この日の気分の推定を1〜4の整数で（4=とても良い, 3=良い, 2=ふつう, 1=いまいち）`;
 }
 
@@ -891,11 +929,12 @@ async function processEntryAI(entry, opts = {}) {
       toast("先に設定画面でGemini APIキーを登録してください");
       state.view = "settings"; render();
     }
-    return;
+    return false;
   }
-  if (aiBusy.has(entry.id)) return;
+  if (aiBusy.has(entry.id)) return false;
   aiBusy.add(entry.id);
   const promptBody = entry.body;   // 処理中に本文が編集されたら結果を捨てて作り直すための基準
+  let ok = false;
   if (state.view === "entry" && state.entryId === entry.id) render();
   try {
     const r = await aiGenerate(entryAiPrompt(entry), ENTRY_AI_SCHEMA, 800);
@@ -905,14 +944,19 @@ async function processEntryAI(entry, opts = {}) {
         .map(t => String(t).trim().replace(/\s+/g, "")).filter(Boolean)
         .map(t => t.startsWith("#") ? t : "#" + t)
         .slice(0, AI_TAGS_MAX);
+      const topics = (Array.isArray(r.topics) ? r.topics : [])
+        .map(t => String(t).trim()).filter(Boolean)
+        .slice(0, AI_TOPICS_MAX);
       const n = Math.round(Number(r.emotion));
       entry.ai = {
         summary: String(r.summary || "").trim(),
         tags,
+        topics,
         emotion: n >= 1 && n <= 4 ? n : null,
         createdAt: todayStr()
       };
       saveData();
+      ok = true;
     }
   } catch (err) {
     // 失敗しても日記は無傷。自動実行はconsoleに留め、手動実行だけユーザーに知らせる
@@ -922,7 +966,8 @@ async function processEntryAI(entry, opts = {}) {
     aiBusy.delete(entry.id);
     if ((state.view === "entry" && state.entryId === entry.id) || state.view === "list") render();
   }
-  if (entry.body !== promptBody) processEntryAI(entry, opts);
+  if (entry.body !== promptBody) return processEntryAI(entry, opts);
+  return ok;
 }
 
 // ===== digest層（週間・月間・年間まとめ） =====
@@ -1023,6 +1068,35 @@ function periodStats(entries) {
   };
 }
 
+// 連続記録日数。今日未記入でも昨日まで続いていれば継続中（今日中に書けば途切れない）
+function calcStreak() {
+  const dates = new Set(state.data.entries.map(e => e.date));
+  const today = todayStr();
+  const wroteToday = dates.has(today);
+  let current = 0;
+  let d = wroteToday ? today : addDays(today, -1);
+  while (dates.has(d)) { current++; d = addDays(d, -1); }
+  // 最長記録は全期間から毎回計算（日付数は高々数千なので十分速い）
+  let best = 0, run = 0, prev = null;
+  for (const dt of [...dates].sort()) {
+    run = prev && dayDiff(prev, dt) === 1 ? run + 1 : 1;
+    if (run > best) best = run;
+    prev = dt;
+  }
+  return { current, best, wroteToday };
+}
+
+// ネタ帳: 全日記のAI抽出ネタを新しい順に平坦化する
+function allTopics() {
+  const out = [];
+  for (const e of sortedEntries()) {
+    if (!e.ai || !Array.isArray(e.ai.topics)) continue;
+    e.ai.topics.forEach((t, i) =>
+      out.push({ key: `${e.id}#${i}`, text: t, entryId: e.id, date: e.date }));
+  }
+  return out;
+}
+
 function saveEntry(title, body, mood, score, date) {
   const now = new Date();
   const entry = {
@@ -1075,7 +1149,9 @@ const ICON_PATHS = {
   sparkles: '<path d="M11 5.5l1.4 3.4 3.4 1.4-3.4 1.4L11 15.1l-1.4-3.4-3.4-1.4 3.4-1.4z"/><path d="M18 14.5l.8 1.9 1.9.8-1.9.8-.8 1.9-.8-1.9-1.9-.8 1.9-.8z"/>',
   pin: '<path d="M12 21s-6.5-5.5-6.5-10.3a6.5 6.5 0 0 1 13 0C18.5 15.5 12 21 12 21z"/><circle cx="12" cy="10.6" r="2.2"/>',
   save: '<line x1="12" y1="4" x2="12" y2="14"/><polyline points="8.2 10.4 12 14.2 15.8 10.4"/><path d="M5 17v2.5h14V17"/>',
-  palette: '<path d="M12 3a9 9 0 1 0 0 18c1.2 0 2-.9 2-2 0-.5-.2-1-.5-1.3-.3-.4-.5-.8-.5-1.3 0-1.1.9-2 2-2h2.2A3.8 3.8 0 0 0 21 10.7 8.8 8.8 0 0 0 12 3z"/><circle cx="7.8" cy="10.6" r="1" fill="currentColor" stroke="none"/><circle cx="12" cy="7.4" r="1" fill="currentColor" stroke="none"/><circle cx="16.2" cy="10.6" r="1" fill="currentColor" stroke="none"/>'
+  palette: '<path d="M12 3a9 9 0 1 0 0 18c1.2 0 2-.9 2-2 0-.5-.2-1-.5-1.3-.3-.4-.5-.8-.5-1.3 0-1.1.9-2 2-2h2.2A3.8 3.8 0 0 0 21 10.7 8.8 8.8 0 0 0 12 3z"/><circle cx="7.8" cy="10.6" r="1" fill="currentColor" stroke="none"/><circle cx="12" cy="7.4" r="1" fill="currentColor" stroke="none"/><circle cx="16.2" cy="10.6" r="1" fill="currentColor" stroke="none"/>',
+  flame: '<path d="M12 3c.6 3-1.8 4.2-3 6-1.4 2-1.5 4.4-.2 6.3A4.8 4.8 0 0 0 17 14c0-1.6-.8-2.8-1.5-3.8C17 11 18 12.5 18 14.5a6 6 0 1 1-11.4-2.6C7.8 9 10.5 8 12 3z"/>',
+  bulb: '<path d="M9 18h6"/><path d="M10 21h4"/><path d="M8.4 14.5A5.5 5.5 0 1 1 15.6 14.5c-.7.7-1.1 1.3-1.1 2.2H9.5c0-.9-.4-1.5-1.1-2.2z"/>'
 };
 function icon(name, size = 18, cls = "") {
   return `<svg class="icn ${cls}" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICON_PATHS[name]}</svg>`;
@@ -1130,7 +1206,7 @@ function render() {
   const views = {
     list: renderList, calendar: renderCalendar, review: renderReview, graph: renderGraph,
     settings: renderSettings, write: renderWrite, entry: renderEntry,
-    search: renderSearch, lock: renderLock, help: renderHelp
+    search: renderSearch, lock: renderLock, help: renderHelp, topics: renderTopics
   };
   app.innerHTML = (views[state.view] || renderList)();
 
@@ -1224,6 +1300,24 @@ function backupBannerHTML() {
   </div>`;
 }
 
+// 継続バナー: 今日まだ書いていないときだけ最上部に出す（書けば消える＝それ自体が達成感）
+function streakBannerHTML() {
+  if (!state.data.entries.length) return "";   // 初回はempty-noteが案内する
+  const st = calcStreak();
+  if (st.wroteToday) {
+    if (st.current < 2) return "";
+    const bestNote = st.current >= st.best && st.current >= 3 ? "（自己ベスト更新中！）" : "";
+    return `<div class="streak-note">${icon("flame", 15)} ${st.current}日連続で書いています${esc(bestNote)}</div>`;
+  }
+  const msg = st.current > 0
+    ? `連続${st.current}日で継続中。今日書けば${st.current + 1}日に伸びます`
+    : `今日から連続記録を（再）スタートしましょう${st.best >= 2 ? `。これまでの最長は${st.best}日` : ""}`;
+  return `<div class="card streak-card">
+    <div style="font-size:13.5px">${icon("flame", 15)} ${esc(msg)}</div>
+    <button class="ghost" data-action="go-write" style="margin-top:10px">今日の日記を書く（3分でOK）</button>
+  </div>`;
+}
+
 function renderList() {
   const entries = sortedEntries();
   const bar = `<div class="topbar">
@@ -1244,7 +1338,7 @@ function renderList() {
     const [y, m] = month.split("-");
     return `<div class="month-head">${y}年${Number(m)}月</div><div class="stack">${list.map(e => entryCardHTML(e)).join("")}</div>`;
   });
-  return bar + backupBannerHTML() + onThisDayHTML() + groups.join("");
+  return bar + streakBannerHTML() + backupBannerHTML() + onThisDayHTML() + groups.join("");
 }
 
 // --- 検索 ---
@@ -1386,6 +1480,13 @@ function renderHelp() {
         <p>データはこの端末のブラウザ内にあります。<b>iPhoneならホーム画面に追加</b>して使うと、オフラインでも開けてデータも守られやすくなります。</p>
         <p>設定 → バックアップから: <b>「共有してバックアップ」→「ファイルに保存」でiCloud Drive</b>に保存できます。JSON/Markdownのダウンロードも可能。</p>
         <p>バックアップしないまま7日たつと、リストにお知らせが出ます。復元は「JSONからインポート」、他の日記アプリからの引っ越しは「テキスト/Markdownから追加インポート」で。</p>`)}
+      ${sec("flame", "続ける仕組み（連続記録）", `
+        <p>今日まだ書いていない日は、リストの一番上に<b>「連続◯日で継続中。今日書けば◯日に伸びます」</b>とだけ出ます。書けば消えるので、通知でせかされる感じはありません。</p>
+        <p>3日・5日・7日…と続けると保存時に<b>🔥お祝い</b>が出ます。<b>グラフ</b>タブに現在の連続日数と最長記録も出ます。<b>1日空いても記録はゼロに戻るだけで、日記は消えません</b>。気楽にまた始めればOKです。</p>
+        <p>さらに確実にしたいときは、下の<b>「毎日のリマインダー」</b>をカレンダーに登録しておくと毎日通知が来ます。</p>`)}
+      ${sec("bulb", "ネタ帳（会話のネタをストック）", `
+        <p>日記を保存すると、AIが要約と一緒に<b>「人に話したくなる話題」</b>を拾って<b>ネタ帳</b>タブに貯めます。友達や家族と話す前にのぞいて、話したら<b>「話した ✓」</b>を押すと済みに移ります。</p>
+        <p>APIキーを設定する前に書いた過去の日記は、ネタ帳の<b>「過去の日記からネタを抽出」</b>ボタンでまとめて拾えます（無料枠を守るため一度に10件ずつ）。</p>`)}
       ${sec("clock", "毎日のリマインダー（書き忘れ防止）", `
         <p>設定 → 「毎日のリマインダー」で時刻を選び、<b>「この時刻の通知をカレンダーに登録」</b>を押します。
         スマホのカレンダーに「毎日◯時に日記を書く」という繰り返し予定が入り、以降は<b>カレンダーが毎日通知</b>してくれます。通知をタップするとこのアプリのリンクから開けます。</p>
@@ -1501,9 +1602,11 @@ function entryAiHTML(e) {
   if (aiBusy.has(e.id)) return `<div class="entry-ai"><div class="muted" style="font-size:13px">${icon("sparkles", 14)} AIが要約中…</div></div>`;
   if (e.ai) {
     const tags = e.ai.tags.map(t => `<span class="badge">${esc(t)}</span>`).join("");
+    const topics = (e.ai.topics || []).map(t => `<div>${icon("bulb", 14)} ${esc(t)}</div>`).join("");
     return `<div class="entry-ai">
       ${e.ai.summary ? `<div class="ai-summary">${esc(e.ai.summary)}</div>` : ""}
       ${tags ? `<div class="badges" style="margin:8px 0 0">${tags}</div>` : ""}
+      ${topics ? `<div class="ai-topics">${topics}</div>` : ""}
       <div class="digest-actions"><button class="ghost small" data-action="run-entry-ai">${icon("refresh", 13)} AIをやり直す</button></div>
     </div>`;
   }
@@ -1580,6 +1683,78 @@ function renderReview() {
     </div>`;
 }
 
+// --- ネタ帳 ---
+function topicItemHTML(t, isUsed) {
+  const label = `${displayDate(t.date).replace(/^\d+年/, "")}の日記`;
+  return `<div class="topic-item card${isUsed ? " done" : ""}">
+    <button class="topic-open" data-action="open-entry" data-id="${esc(t.entryId)}">
+      <span class="bulb-mark">${icon("bulb", 14)}</span> ${esc(t.text)}
+      <span class="topic-date">${esc(label)}</span>
+    </button>
+    <button class="topic-check" data-action="topic-used" data-key="${esc(t.key)}">${isUsed ? "戻す" : "話した ✓"}</button>
+  </div>`;
+}
+
+function renderTopics() {
+  const used = state.data.usedTopics;
+  const items = allTopics();
+  const fresh = items.filter(t => !used[t.key]);
+  const done = items.filter(t => used[t.key]);
+  // topics未抽出の日記（AI未処理 or 旧バージョンで処理済み）
+  const pending = state.data.entries.filter(e => !e.ai || !Array.isArray(e.ai.topics)).length;
+  let extractBtn = "";
+  if (state.extracting) {
+    extractBtn = `<button class="ghost" disabled>${icon("sparkles", 14)} 抽出中…（${state.extracting.done}/${state.extracting.total}）</button>`;
+  } else if (pending) {
+    extractBtn = `<button class="ghost" data-action="extract-topics">${icon("sparkles", 14)} 過去の日記からネタを抽出（残り${pending}件・一度に${Math.min(pending, TOPIC_BATCH)}件）</button>
+      <div class="muted" style="font-size:12px;margin-top:6px">※AI要約・タグも一緒に作り直されます</div>`;
+  }
+  const freshList = fresh.length
+    ? `<div class="stack">${fresh.map(t => topicItemHTML(t, false)).join("")}</div>`
+    : `<div class="empty-note">${items.length ? "全部話しました！新しい日記を書くとまた貯まります。" : "まだネタがありません。日記を書くと、AIが「人に話したくなる話題」を拾ってここに貯めていきます。"}</div>`;
+  const doneList = done.length
+    ? `<details><summary>話した済み ${done.length}件 ▾</summary>
+        <div class="stack" style="margin-top:8px">${done.map(t => topicItemHTML(t, true)).join("")}</div></details>`
+    : "";
+  return `
+    <div class="topbar"><span style="width:40px"></span><h1>ネタ帳</h1><span style="width:40px"></span></div>
+    <div class="stack-lg topics-sec">
+      <div class="muted" style="font-size:13px">日記からAIが拾った会話のネタのストック。雑談の前にのぞいて、話したらチェック。</div>
+      ${freshList}
+      ${extractBtn ? `<div>${extractBtn}</div>` : ""}
+      ${doneList}
+    </div>`;
+}
+
+// 過去の日記への一括ネタ抽出。無料枠を守るため直列＋1回の上限付き
+async function extractTopicsBatch() {
+  if (state.extracting) return;
+  if (!state.data.settings.apiKey) {
+    toast("先に設定画面でGemini APIキーを登録してください");
+    state.view = "settings"; render();
+    return;
+  }
+  const targets = sortedEntries().filter(e => !e.ai || !Array.isArray(e.ai.topics)).slice(0, TOPIC_BATCH);
+  state.extracting = { done: 0, total: targets.length };
+  render();
+  let ok = 0;
+  try {
+    for (const e of targets) {
+      if (await processEntryAI(e)) ok++;
+      state.extracting.done++;
+      if (state.view === "topics") render();
+      // 全滅（キー無効・上限等）が続くなら早めに打ち切る
+      if (state.extracting.done >= 3 && ok === 0) break;
+    }
+  } finally {
+    const failed = state.extracting.done - ok;
+    state.extracting = null;
+    if (state.view === "topics") render();
+    toast(ok ? `${ok}件からネタを抽出しました${failed ? `（${failed}件失敗）` : ""}`
+             : "抽出に失敗しました。APIキーや無料枠の上限を確認してください");
+  }
+}
+
 // --- グラフ ---
 // 日ごとに平均して {date, score, mood} の系列を作る
 function dailySeries() {
@@ -1609,10 +1784,12 @@ function renderGraph() {
     state.graphRange > 0
       ? sortedEntries().filter(e => e.date >= addDays(todayStr(), -state.graphRange))
       : sortedEntries());
+  const stk = calcStreak();
   const tiles = `<div class="tiles">
     <div class="tile"><div class="num">${st.count}</div><div class="cap">日記</div></div>
     <div class="tile"><div class="num">${st.avgScore != null ? st.avgScore : "–"}</div><div class="cap">平均点</div></div>
     <div class="tile"><div class="num">${st.avgMoodValue ? moodSVG(st.avgMoodValue, 26) : "–"}</div><div class="cap">気分の平均</div></div>
+    <div class="tile"><div class="num" style="color:#ff9e64">${stk.current}</div><div class="cap">連続日数${stk.best >= 2 ? `<br>最長${stk.best}日` : ""}</div></div>
   </div>`;
   const scoreChart = scorePts.length
     ? lineChartSVG(scorePts.map(p => ({ x: p.date, y: p.score })), { yMin: 0, yMax: 10, yTicks: [0, 5, 10], color: "var(--chart-score)", id: "score", fmt: v => `${Math.round(v * 10) / 10}点` })
@@ -1947,9 +2124,18 @@ function handleSave() {
       return;
     }
   }
-  saveEntry(title, body, state.draft.mood, state.draft.score, state.draft.date);
+  const savedDate = state.draft.date;
+  saveEntry(title, body, state.draft.mood, state.draft.score, savedDate);
   backToList();
-  toast("保存しました");
+  // 今日の分を書いたら連続日数でお祝い（節目は強めに）。続けたくなる小さなご褒美
+  const st = calcStreak();
+  if (savedDate === todayStr() && st.current >= 2) {
+    toast(STREAK_MILESTONES.includes(st.current)
+      ? `🔥 ${st.current}日連続達成！すごい！`
+      : `保存しました（🔥${st.current}日連続）`);
+  } else {
+    toast("保存しました");
+  }
 }
 
 document.addEventListener("click", e => {
@@ -2111,6 +2297,13 @@ document.addEventListener("click", e => {
     state.draft.mood = state.draft.mood === n ? null : n;
     refreshDraftButtons();
   }
+  else if (a === "topic-used") {
+    const k = el.dataset.key;
+    if (state.data.usedTopics[k]) delete state.data.usedTopics[k];
+    else state.data.usedTopics[k] = todayStr();
+    saveData(); render();
+  }
+  else if (a === "extract-topics") { extractTopicsBatch(); }
   else if (a === "review-kind") { state.reviewKind = el.dataset.kind; render(); }
   else if (a === "graph-range") { state.graphRange = Number(el.dataset.days); render(); }
   else if (a === "gen-digest") {
@@ -2188,7 +2381,7 @@ document.getElementById("importTextFile").addEventListener("change", e => {
 
 // ===== 起動 =====
 // ナビとFABのアイコンを注入（静的HTML側に絵文字を残さない）
-const NAV_ICONS = { list: "list", calendar: "calendar", review: "refresh", graph: "chart", settings: "sliders" };
+const NAV_ICONS = { list: "list", calendar: "calendar", review: "refresh", graph: "chart", topics: "bulb", settings: "sliders" };
 for (const b of document.querySelectorAll("#nav button")) {
   b.querySelector(".ico").innerHTML = icon(NAV_ICONS[b.dataset.view], 20);
 }
