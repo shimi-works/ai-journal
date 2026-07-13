@@ -108,6 +108,13 @@ button.ghost:hover { background: var(--surface-2); }
 .otd-head { font-size: 13px; color: var(--muted); margin: 8px 0; letter-spacing: 0.06em; }
 .otd-years { font-size: 13px; color: var(--accent); font-weight: 700; white-space: nowrap; }
 
+/* ===== 新機能のお知らせ ===== */
+.notice-card { margin-bottom: 16px; border-color: var(--accent); }
+.notice-title { font-weight: 700; font-size: 14.5px; margin-bottom: 6px; }
+.notice-body { font-size: 13px; color: var(--muted); line-height: 1.7; margin-bottom: 12px; }
+.notice-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.notice-actions button { flex: 1; min-width: 120px; }
+
 /* ===== 継続（ストリーク） ===== */
 .streak-card { margin-bottom: 16px; }
 .streak-card .icn, .streak-note .icn { color: #ff9e64; }
@@ -447,7 +454,8 @@ function defaultData() {
       },
       lastBackupAt: null,        // 最後にエクスポート/共有した日時（ISO）
       lastBackupCount: 0,        // その時点の日記件数（未バックアップ増加分の表示用）
-      backupSnoozedUntil: null   // リマインダーを「あとで」した場合の再表示日
+      backupSnoozedUntil: null,  // リマインダーを「あとで」した場合の再表示日
+      lastSeenNotice: null       // 最後に見た「新機能のお知らせ」のID（未読判定用）
     },
     entries: [],
     digests: { week: {}, month: {}, year: {} },
@@ -476,6 +484,7 @@ function migrateData(d) {
   if (!("lastBackupAt" in d.settings)) d.settings.lastBackupAt = null;
   if (!("lastBackupCount" in d.settings)) d.settings.lastBackupCount = 0;
   if (!("backupSnoozedUntil" in d.settings)) d.settings.backupSnoozedUntil = null;
+  if (!("lastSeenNotice" in d.settings)) d.settings.lastSeenNotice = null;
   if (!("googleClientId" in d.settings)) d.settings.googleClientId = "";
   if (!("reminderTime" in d.settings)) d.settings.reminderTime = "21:00";
   if (!d.settings.push || typeof d.settings.push !== "object") {
@@ -1313,6 +1322,25 @@ function backupBannerHTML() {
   </div>`;
 }
 
+// 新機能のお知らせ（アップデート告知）。既存ユーザーが次に開いたとき最上部に出る。
+// 新しいお知らせを出すときは id を変える（過去に閉じた人にも再表示される）。
+const CURRENT_NOTICE = {
+  id: "notify-2026-07",
+  title: "🔔 新機能：毎日のリマインダー通知",
+  body: "書き忘れ防止に、決まった時刻へ「日記を書こう」と通知できるようになりました。設定はかんたん、押すだけです。"
+};
+function noticeBannerHTML() {
+  if (state.data.settings.lastSeenNotice === CURRENT_NOTICE.id) return "";
+  return `<div class="card notice-card">
+    <div class="notice-title">${esc(CURRENT_NOTICE.title)}</div>
+    <div class="notice-body">${esc(CURRENT_NOTICE.body)}</div>
+    <div class="notice-actions">
+      <button class="primary" data-action="open-push-settings">通知を設定する</button>
+      <button class="ghost" data-action="dismiss-notice">あとで</button>
+    </div>
+  </div>`;
+}
+
 // 継続バナー: 今日まだ書いていないときだけ最上部に出す（書けば消える＝それ自体が達成感）
 function streakBannerHTML() {
   if (!state.data.entries.length) return "";   // 初回はempty-noteが案内する
@@ -1351,7 +1379,7 @@ function renderList() {
     const [y, m] = month.split("-");
     return `<div class="month-head">${y}年${Number(m)}月</div><div class="stack">${list.map(e => entryCardHTML(e)).join("")}</div>`;
   });
-  return bar + streakBannerHTML() + backupBannerHTML() + onThisDayHTML() + groups.join("");
+  return bar + noticeBannerHTML() + streakBannerHTML() + backupBannerHTML() + onThisDayHTML() + groups.join("");
 }
 
 // --- 検索 ---
@@ -1965,16 +1993,31 @@ function renderSettings() {
         <div class="label">スマホのカレンダーに「毎日◯時に日記を書く」という繰り返し予定を登録します。以降はカレンダーが毎日通知してくれます（登録は一度だけ。時刻を変えたいときは古い予定を消して登録し直してください）</div>
       </div>
     </div>
-    <div class="settings-row">
+    <div class="settings-row" id="pushSection">
       <div class="label">② プッシュ通知（アプリから直接届く）${s.push.enabled ? "（有効）" : ""}</div>
       <div class="stack">
-        ${!pushSupported() ? `<div class="label" style="color:var(--sun)">※この画面ではプッシュを使えません。iPhoneは<b>ホーム画面に追加</b>してから、そのアイコンで開いてください（PC/Androidはブラウザのままで可）。</div>` : ""}
+        ${!pushSupported() ? `<div class="label" style="color:var(--sun)">※この画面ではプッシュを使えません。iPhoneは下の「iPhoneの人」の手順で<b>ホーム画面に追加</b>してから開いてください。</div>` : ""}
         ${s.push.enabled
           ? `<button class="ghost" data-action="test-push">${icon("clock", 14)} テスト通知を今すぐ送る</button>
              <button class="ghost" data-action="disable-push">プッシュ通知を無効にする</button>
              <div class="label">有効です。毎日 <b>${esc(s.reminderTime)}</b> ごろに「日記を書こう」と通知が届きます。</div>`
           : `<button class="primary" data-action="enable-push" style="padding:12px">通知を有効にする</button>
-             <div class="label">むずかしい設定は不要です。押して通知を許可すると、毎日 <b>${esc(s.reminderTime)}</b> ごろに通知が届きます。iPhoneは<b>ホーム画面に追加</b>したアイコンから開いた状態で押してください。</div>`}
+             <div class="label">押して通知を許可すると、毎日 <b>${esc(s.reminderTime)}</b> ごろに通知が届きます。うまくいかないときは、下のお使いの端末の手順を見てください。</div>`}
+        <details>
+          <summary class="label" style="cursor:pointer">📱 iPhone（iPad）の人はこちら</summary>
+          <ol style="font-size:13px;color:var(--muted);padding-left:20px;line-height:1.9;margin:6px 0 0">
+            <li><b>Safari</b>でこのアプリを開く（Chromeアプリではなく標準のSafari）</li>
+            <li>下の共有ボタン <b>⬆️</b> を押す</li>
+            <li>「<b>ホーム画面に追加</b>」を選ぶ</li>
+            <li>ホーム画面にできた<b>アイコンから起動</b>する（← これが必須。Safariのタブのままだと通知は使えません）</li>
+            <li>この設定②で「通知を有効にする」→「許可」</li>
+          </ol>
+          <div class="label" style="margin-top:6px">iPhoneはApple側の仕様で、ホーム画面に追加したアプリからでないとプッシュ通知を使えません（iOS 16.4以上が必要）。</div>
+        </details>
+        <details>
+          <summary class="label" style="cursor:pointer">🤖 Android / 💻 パソコンの人はこちら</summary>
+          <div class="label" style="margin-top:6px"><b>そのままでOK</b>です。ChromeやEdgeでこのページを開いて、上の「通知を有効にする」を押し、通知を「許可」するだけで届きます。ホーム画面/デスクトップに追加すると、より安定して受け取れます（任意）。</div>
+        </details>
         <details>
           <summary class="label" style="cursor:pointer">自分の送信役を使う（上級者・任意）</summary>
           <div class="stack" style="margin-top:8px">
@@ -2368,6 +2411,21 @@ document.addEventListener("click", e => {
   }
   else if (a === "go-search") { state.view = "search"; render(); }
   else if (a === "go-help") { state.view = "help"; render(); }
+  else if (a === "dismiss-notice") {
+    state.data.settings.lastSeenNotice = CURRENT_NOTICE.id;
+    saveData(); render();
+  }
+  else if (a === "open-push-settings") {
+    state.data.settings.lastSeenNotice = CURRENT_NOTICE.id;
+    saveData();
+    state.view = "settings";
+    render();
+    // プッシュ通知セクションまでスクロール（描画後）
+    setTimeout(() => {
+      const el = document.getElementById("pushSection");
+      if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+    }, 60);
+  }
   else if (a === "cal-move") {
     const [y, m] = state.calMonth.split("-").map(Number);
     const d = new Date(y, m - 1 + Number(el.dataset.delta), 1);
