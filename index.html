@@ -360,6 +360,10 @@ const FONTS = {
 };
 const FONT_SIZES = { s: { label: "小", zoom: 0.92 }, m: { label: "標準", zoom: 1 }, l: { label: "大", zoom: 1.12 } };
 const DEFAULT_LOCATION = { name: "仙台", lat: 38.2682, lon: 140.8694 };
+// 既定のプッシュ送信役（作者が運用する共用Worker。利用者は設定不要でONにできる）。
+// VAPID公開鍵は名前のとおり公開してよい値。秘密鍵はWorkerのシークレット内にのみ存在する。
+const DEFAULT_PUSH_SERVER = "https://ai-journal-push.shimi-works.workers.dev";
+const DEFAULT_VAPID_PUBLIC_KEY = "BCZm50Wq_BoGnFheNngDUVylb_iUMc_gsy1b8yu9iF_BtYtl2WrMTUQ79eww_xk9q-v2nrfVAkHxKrNeiorIUk4";
 const WEEKDAYS = ["日", "月", "火", "水", "木", "金", "土"];
 const SNIPPET_TITLE_LEN = 24;
 const WEATHER_TIMEOUT_MS = 5000;
@@ -1499,13 +1503,10 @@ function renderHelp() {
       ${sec("clock", "毎日のリマインダー（書き忘れ防止）", `
         <p>設定に通知が<b>2種類</b>あります。まず希望の<b>時刻</b>を選んでから、使いたい方を設定します。</p>
         <p><b>① カレンダー通知（設定不要・すぐ使える）</b>: 「カレンダーに毎日の通知を登録」を押すと、スマホのカレンダーに繰り返し予定が入り、以降はカレンダーが毎日通知してくれます。登録は一度だけ。時刻を変えるときは前の「AI Journal」予定を消して登録し直します。</p>
-        <p><b>② プッシュ通知（アプリから直接届く）</b>: 少しだけ準備すると、<b>このアプリ名で毎日ちょうどの時刻に</b>通知が届きます。通知をタップするとアプリが開きます。準備は<b>送信役を無料で用意</b>する初回作業（約10分・下記）。</p>
-        <p class="muted">①はカレンダーアプリからの通知、②はAI Journalからの通知です。②のほうが「らしい」ですが、①だけでも十分に続けられます。</p>`)}
-      ${sec("clock", "プッシュ通知の準備（②を使うとき・任意）", `
-        <p>Webアプリは自分だけでは「閉じている間の通知」を送れないので、<b>あなた専用の小さな送信役</b>を1回だけ用意します。無料（Cloudflare・クレカ不要・使いすぎても課金されず止まるだけ）。</p>
-        <p>手順は配布フォルダ <code>push-server</code> の中の <b>README</b> に全部あります。ざっくり: ①Cloudflareに無料登録 → ②<code>npm install</code> → ③鍵を作る → ④<code>npx wrangler deploy</code> → ⑤表示された<b>URLとVAPID公開鍵</b>を設定の②欄に貼って「通知を有効にする」。</p>
-        <p><b>iPhoneは必須</b>: Safariで開いて<b>ホーム画面に追加</b>し、そのアイコンから起動した状態で有効化してください（iOSの仕様）。</p>
-        <p>日記の中身は送信役に一切送られません。送るのは「日記を書こう」という定型文だけです。</p>`)}
+        <p><b>② プッシュ通知（アプリから直接届く）</b>: 設定の②で<b>「通知を有効にする」</b>を押して通知を許可するだけ。<b>むずかしい準備は不要</b>で、毎日ちょうどの時刻に<b>このアプリ名で</b>通知が届きます。通知をタップするとアプリが開きます。</p>
+        <p><b>iPhoneは</b>: Safariで開いて<b>ホーム画面に追加</b>し、そのアイコンから起動した状態で有効化してください（iOSの仕様。PC/Androidはブラウザのままで可）。</p>
+        <p class="muted">①はカレンダーアプリからの通知、②はAI Journalからの通知です。どちらか好きな方（両方でも）でOK。日記の中身は通知の仕組みに一切送られず、送るのは「日記を書こう」という定型文だけです。</p>
+        <p class="muted">※②は作者が用意した送信役を使っています。自分専用の送信役を無料で立てたい人は、リポジトリの <code>push-server/README</code> の手順でデプロイし、設定②の「自分の送信役を使う」に入れてください。</p>`)}
       ${sec("lock", "パスワードロック", `
         <p>設定から<b>数字4桁</b>で設定できます。次からアプリを開くときに入力を求められます（4桁入れると自動で開きます）。</p>
         <p>忘れたら、ロック画面の「パスワードを忘れた場合」→「<b>リセット</b>」と入力すれば解除されます。<b>日記は消えません</b>。</p>
@@ -1965,26 +1966,23 @@ function renderSettings() {
       </div>
     </div>
     <div class="settings-row">
-      <div class="label">② プッシュ通知（アプリから直接届く）${s.push.enabled ? "（有効）" : "（未設定）"}</div>
+      <div class="label">② プッシュ通知（アプリから直接届く）${s.push.enabled ? "（有効）" : ""}</div>
       <div class="stack">
         ${!pushSupported() ? `<div class="label" style="color:var(--sun)">※この画面ではプッシュを使えません。iPhoneは<b>ホーム画面に追加</b>してから、そのアイコンで開いてください（PC/Androidはブラウザのままで可）。</div>` : ""}
         ${s.push.enabled
           ? `<button class="ghost" data-action="test-push">${icon("clock", 14)} テスト通知を今すぐ送る</button>
              <button class="ghost" data-action="disable-push">プッシュ通知を無効にする</button>
-             <div class="label">有効です。毎日 <b>${esc(s.reminderTime)}</b> ごろに「日記を書こう」と通知が届きます（送信役: ${esc(pushServerBase() || "未設定")}）。</div>`
-          : `<input type="text" id="pushServerUrl" value="${esc(s.push.serverUrl)}" placeholder="送信役のURL（例: https://ai-journal-push.xxxx.workers.dev）" autocomplete="off">
-             <input type="text" id="pushVapidKey" value="${esc(s.push.vapidPublicKey)}" placeholder="VAPID公開鍵（Workerデプロイ時に表示される長い文字列）" autocomplete="off">
-             <button class="ghost" data-action="save-push-config">${icon("save", 14)} 送信役の設定を保存</button>
-             <button class="primary" data-action="enable-push" style="padding:12px">通知を有効にする</button>`}
+             <div class="label">有効です。毎日 <b>${esc(s.reminderTime)}</b> ごろに「日記を書こう」と通知が届きます。</div>`
+          : `<button class="primary" data-action="enable-push" style="padding:12px">通知を有効にする</button>
+             <div class="label">むずかしい設定は不要です。押して通知を許可すると、毎日 <b>${esc(s.reminderTime)}</b> ごろに通知が届きます。iPhoneは<b>ホーム画面に追加</b>したアイコンから開いた状態で押してください。</div>`}
         <details>
-          <summary class="label" style="cursor:pointer">送信役の作り方（初回のみ・約10分・完全無料・クレカ不要）</summary>
-          <ol style="font-size:13px;color:var(--muted);padding-left:20px;line-height:1.9">
-            <li><a href="https://dash.cloudflare.com/sign-up" target="_blank" rel="noopener">Cloudflare</a> に無料登録（カード不要）</li>
-            <li>配布している <code>push-server</code> フォルダを、README の手順どおり <code>npx wrangler deploy</code> でデプロイ</li>
-            <li>デプロイ時に表示される <b>Worker URL</b> と <b>VAPID公開鍵</b> を上の2欄に貼って「保存」</li>
-            <li>「通知を有効にする」を押し、通知を許可（iPhoneはホーム画面アイコンから開いた状態で）</li>
-          </ol>
-          <div class="label">送信役はあなた専用。日記の中身は一切送らず、「書こう」という定型文だけを送ります。無料枠を超えても課金されず配信が止まるだけです。</div>
+          <summary class="label" style="cursor:pointer">自分の送信役を使う（上級者・任意）</summary>
+          <div class="stack" style="margin-top:8px">
+            <input type="text" id="pushServerUrl" value="${esc(s.push.serverUrl)}" placeholder="送信役のURL（空なら既定を使用）" autocomplete="off">
+            <input type="text" id="pushVapidKey" value="${esc(s.push.vapidPublicKey)}" placeholder="VAPID公開鍵（空なら既定を使用）" autocomplete="off">
+            <button class="ghost" data-action="save-push-config">${icon("save", 14)} この送信役を保存</button>
+            <div class="label">両方とも空のままなら、作者が運用する送信役を使います（設定不要）。自分でCloudflare Workerを無料運用したい人は、リポジトリの <code>push-server/README</code> の手順どおりデプロイして、ここにURLと公開鍵を入れてください。日記の中身は送信役に一切送られません。</div>
+          </div>
         </details>
       </div>
     </div>
@@ -2108,19 +2106,19 @@ function pushSupported() {
     && location.protocol === "https:";
 }
 
-// サーバーURLの末尾スラッシュを外し、パスを足しやすくする
-function pushServerBase() {
-  return (state.data.settings.push.serverUrl || "").trim().replace(/\/+$/, "");
+// 送信役と公開鍵は「設定にあればそれ、無ければ既定（作者の共用送信役）」を使う。
+// 末尾スラッシュは外してパスを足しやすくする。
+function effectivePushServer() {
+  return (state.data.settings.push.serverUrl || DEFAULT_PUSH_SERVER).trim().replace(/\/+$/, "");
+}
+function effectiveVapidKey() {
+  return (state.data.settings.push.vapidPublicKey || DEFAULT_VAPID_PUBLIC_KEY).trim();
 }
 
 async function enablePush() {
   const p = state.data.settings.push;
   if (!pushSupported()) {
     toast("この環境ではプッシュ通知を使えません（iPhoneはホーム画面に追加したうえで開いてください）");
-    return;
-  }
-  if (!pushServerBase() || !p.vapidPublicKey.trim()) {
-    toast("先に送信役のURLとVAPID公開鍵を保存してください");
     return;
   }
   try {
@@ -2132,9 +2130,9 @@ async function enablePush() {
     if (existing) await existing.unsubscribe().catch(() => {});
     const sub = await reg.pushManager.subscribe({
       userVisibleOnly: true,
-      applicationServerKey: urlBase64ToUint8Array(p.vapidPublicKey.trim())
+      applicationServerKey: urlBase64ToUint8Array(effectiveVapidKey())
     });
-    const res = await fetch(pushServerBase() + "/subscribe", {
+    const res = await fetch(effectivePushServer() + "/subscribe", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -2163,9 +2161,9 @@ async function disablePush() {
       if (sub) {
         const endpoint = sub.endpoint;
         await sub.unsubscribe().catch(() => {});
-        if (pushServerBase()) {
+        if (effectivePushServer()) {
           // 送信役からも購読を消す（失敗しても購読解除は済んでいるので握りつぶす）
-          fetch(pushServerBase() + "/unsubscribe", {
+          fetch(effectivePushServer() + "/unsubscribe", {
             method: "POST", headers: { "content-type": "application/json" },
             body: JSON.stringify({ endpoint })
           }).catch(() => {});
@@ -2184,9 +2182,9 @@ async function disablePush() {
 // 有効時に希望時刻を変えたら、送信役の登録時刻も更新する
 async function updatePushTime() {
   const p = state.data.settings.push;
-  if (!p.enabled || !pushServerBase() || !p.endpoint) return;
+  if (!p.enabled || !effectivePushServer() || !p.endpoint) return;
   try {
-    await fetch(pushServerBase() + "/subscribe", {
+    await fetch(effectivePushServer() + "/subscribe", {
       method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({
         endpoint: p.endpoint,
@@ -2202,7 +2200,7 @@ async function sendTestPush() {
   const p = state.data.settings.push;
   if (!p.enabled || !p.endpoint) { toast("先にプッシュ通知を有効にしてください"); return; }
   try {
-    const res = await fetch(pushServerBase() + "/test", {
+    const res = await fetch(effectivePushServer() + "/test", {
       method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({ endpoint: p.endpoint })
     });
