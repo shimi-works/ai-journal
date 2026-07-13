@@ -434,7 +434,13 @@ function defaultData() {
       passcodeHash: null,
       theme: { accent: "blue", font: "gothic", fontSize: "m" },
       googleClientId: "",        // Googleカレンダー連携用OAuthクライアントID（本人が作成して貼る）
-      reminderTime: "21:00",     // 通知リマインダーの希望時刻（.ics生成に使う。既定は21時）
+      reminderTime: "21:00",     // 通知リマインダーの希望時刻（.ics/プッシュ両方で使う。既定は21時）
+      push: {                    // 本物のプッシュ通知（本人がCloudflare Workerを無料デプロイして使う）
+        serverUrl: "",           //   送信役WorkerのURL（例: https://xxx.workers.dev）
+        vapidPublicKey: "",      //   Workerが生成したVAPID公開鍵（Base64URL）
+        enabled: false,          //   購読中フラグ
+        endpoint: null           //   購読中のendpoint（解除・重複判定用）
+      },
       lastBackupAt: null,        // 最後にエクスポート/共有した日時（ISO）
       lastBackupCount: 0,        // その時点の日記件数（未バックアップ増加分の表示用）
       backupSnoozedUntil: null   // リマインダーを「あとで」した場合の再表示日
@@ -468,6 +474,9 @@ function migrateData(d) {
   if (!("backupSnoozedUntil" in d.settings)) d.settings.backupSnoozedUntil = null;
   if (!("googleClientId" in d.settings)) d.settings.googleClientId = "";
   if (!("reminderTime" in d.settings)) d.settings.reminderTime = "21:00";
+  if (!d.settings.push || typeof d.settings.push !== "object") {
+    d.settings.push = { serverUrl: "", vapidPublicKey: "", enabled: false, endpoint: null };
+  }
   if (!d.usedTopics || typeof d.usedTopics !== "object") d.usedTopics = {};
   return d;
 }
@@ -1488,10 +1497,15 @@ function renderHelp() {
         <p>日記を保存すると、AIが要約と一緒に<b>「人に話したくなる話題」</b>を拾って<b>ネタ帳</b>タブに貯めます。友達や家族と話す前にのぞいて、話したら<b>「話した ✓」</b>を押すと済みに移ります。</p>
         <p>APIキーを設定する前に書いた過去の日記は、ネタ帳の<b>「過去の日記からネタを抽出」</b>ボタンでまとめて拾えます（無料枠を守るため一度に10件ずつ）。</p>`)}
       ${sec("clock", "毎日のリマインダー（書き忘れ防止）", `
-        <p>設定 → 「毎日のリマインダー」で時刻を選び、<b>「この時刻の通知をカレンダーに登録」</b>を押します。
-        スマホのカレンダーに「毎日◯時に日記を書く」という繰り返し予定が入り、以降は<b>カレンダーが毎日通知</b>してくれます。通知をタップするとこのアプリのリンクから開けます。</p>
-        <p>登録は一度だけでOKです。時刻を変えたいときは、カレンダー側で前の「AI Journal」予定を消してから、新しい時刻で登録し直してください。</p>
-        <p class="muted"><b>なぜこの方式？</b> このアプリはサーバーを持たないので、閉じている間にアプリ自身から通知を送ることはできません。代わりに、確実に鳴るOSのカレンダー通知を使っています。</p>`)}
+        <p>設定に通知が<b>2種類</b>あります。まず希望の<b>時刻</b>を選んでから、使いたい方を設定します。</p>
+        <p><b>① カレンダー通知（設定不要・すぐ使える）</b>: 「カレンダーに毎日の通知を登録」を押すと、スマホのカレンダーに繰り返し予定が入り、以降はカレンダーが毎日通知してくれます。登録は一度だけ。時刻を変えるときは前の「AI Journal」予定を消して登録し直します。</p>
+        <p><b>② プッシュ通知（アプリから直接届く）</b>: 少しだけ準備すると、<b>このアプリ名で毎日ちょうどの時刻に</b>通知が届きます。通知をタップするとアプリが開きます。準備は<b>送信役を無料で用意</b>する初回作業（約10分・下記）。</p>
+        <p class="muted">①はカレンダーアプリからの通知、②はAI Journalからの通知です。②のほうが「らしい」ですが、①だけでも十分に続けられます。</p>`)}
+      ${sec("clock", "プッシュ通知の準備（②を使うとき・任意）", `
+        <p>Webアプリは自分だけでは「閉じている間の通知」を送れないので、<b>あなた専用の小さな送信役</b>を1回だけ用意します。無料（Cloudflare・クレカ不要・使いすぎても課金されず止まるだけ）。</p>
+        <p>手順は配布フォルダ <code>push-server</code> の中の <b>README</b> に全部あります。ざっくり: ①Cloudflareに無料登録 → ②<code>npm install</code> → ③鍵を作る → ④<code>npx wrangler deploy</code> → ⑤表示された<b>URLとVAPID公開鍵</b>を設定の②欄に貼って「通知を有効にする」。</p>
+        <p><b>iPhoneは必須</b>: Safariで開いて<b>ホーム画面に追加</b>し、そのアイコンから起動した状態で有効化してください（iOSの仕様）。</p>
+        <p>日記の中身は送信役に一切送られません。送るのは「日記を書こう」という定型文だけです。</p>`)}
       ${sec("lock", "パスワードロック", `
         <p>設定から<b>数字4桁</b>で設定できます。次からアプリを開くときに入力を求められます（4桁入れると自動で開きます）。</p>
         <p>忘れたら、ロック画面の「パスワードを忘れた場合」→「<b>リセット</b>」と入力すれば解除されます。<b>日記は消えません</b>。</p>
@@ -1942,11 +1956,36 @@ function renderSettings() {
       </div>
     </div>
     <div class="settings-row">
-      <div class="label">毎日のリマインダー（書き忘れ防止）</div>
+      <div class="label">毎日のリマインダー（書き忘れ防止）・希望時刻</div>
       <div class="stack">
         <input type="time" id="reminderTime" value="${esc(s.reminderTime)}">
-        <button class="ghost" data-action="add-reminder">${icon("clock", 14)} この時刻の通知をカレンダーに登録</button>
+        <div class="label" style="margin:0">この時刻を、下の2つの通知方法が共通で使います。</div>
+        <button class="ghost" data-action="add-reminder">${icon("clock", 14)} ① カレンダーに毎日の通知を登録（設定不要・すぐ使える）</button>
         <div class="label">スマホのカレンダーに「毎日◯時に日記を書く」という繰り返し予定を登録します。以降はカレンダーが毎日通知してくれます（登録は一度だけ。時刻を変えたいときは古い予定を消して登録し直してください）</div>
+      </div>
+    </div>
+    <div class="settings-row">
+      <div class="label">② プッシュ通知（アプリから直接届く）${s.push.enabled ? "（有効）" : "（未設定）"}</div>
+      <div class="stack">
+        ${!pushSupported() ? `<div class="label" style="color:var(--sun)">※この画面ではプッシュを使えません。iPhoneは<b>ホーム画面に追加</b>してから、そのアイコンで開いてください（PC/Androidはブラウザのままで可）。</div>` : ""}
+        ${s.push.enabled
+          ? `<button class="ghost" data-action="test-push">${icon("clock", 14)} テスト通知を今すぐ送る</button>
+             <button class="ghost" data-action="disable-push">プッシュ通知を無効にする</button>
+             <div class="label">有効です。毎日 <b>${esc(s.reminderTime)}</b> ごろに「日記を書こう」と通知が届きます（送信役: ${esc(pushServerBase() || "未設定")}）。</div>`
+          : `<input type="text" id="pushServerUrl" value="${esc(s.push.serverUrl)}" placeholder="送信役のURL（例: https://ai-journal-push.xxxx.workers.dev）" autocomplete="off">
+             <input type="text" id="pushVapidKey" value="${esc(s.push.vapidPublicKey)}" placeholder="VAPID公開鍵（Workerデプロイ時に表示される長い文字列）" autocomplete="off">
+             <button class="ghost" data-action="save-push-config">${icon("save", 14)} 送信役の設定を保存</button>
+             <button class="primary" data-action="enable-push" style="padding:12px">通知を有効にする</button>`}
+        <details>
+          <summary class="label" style="cursor:pointer">送信役の作り方（初回のみ・約10分・完全無料・クレカ不要）</summary>
+          <ol style="font-size:13px;color:var(--muted);padding-left:20px;line-height:1.9">
+            <li><a href="https://dash.cloudflare.com/sign-up" target="_blank" rel="noopener">Cloudflare</a> に無料登録（カード不要）</li>
+            <li>配布している <code>push-server</code> フォルダを、README の手順どおり <code>npx wrangler deploy</code> でデプロイ</li>
+            <li>デプロイ時に表示される <b>Worker URL</b> と <b>VAPID公開鍵</b> を上の2欄に貼って「保存」</li>
+            <li>「通知を有効にする」を押し、通知を許可（iPhoneはホーム画面アイコンから開いた状態で）</li>
+          </ol>
+          <div class="label">送信役はあなた専用。日記の中身は一切送らず、「書こう」という定型文だけを送ります。無料枠を超えても課金されず配信が止まるだけです。</div>
+        </details>
       </div>
     </div>
     <div class="settings-row">
@@ -2049,6 +2088,128 @@ async function addReminder() {
   } else {
     downloadFile("ai-journal-reminder.ics", ics, "text/calendar");
     toast("カレンダーファイルを保存しました。開いて追加してください");
+  }
+}
+
+// ===== 本物のプッシュ通知（Web Push・送信役は本人のCloudflare Worker） =====
+// 仕組み: このPWAで購読を作り、購読情報＋希望時刻を送信役へ登録する。送信役は毎日その時刻に
+//        Web Push（VAPID署名）を送り、Service Workerが通知を表示する。サーバー費用は無料枠内。
+function urlBase64ToUint8Array(base64String) {
+  const padding = "=".repeat((4 - base64String.length % 4) % 4);
+  const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+  const raw = atob(base64);
+  const arr = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) arr[i] = raw.charCodeAt(i);
+  return arr;
+}
+
+function pushSupported() {
+  return "serviceWorker" in navigator && "PushManager" in window && "Notification" in window
+    && location.protocol === "https:";
+}
+
+// サーバーURLの末尾スラッシュを外し、パスを足しやすくする
+function pushServerBase() {
+  return (state.data.settings.push.serverUrl || "").trim().replace(/\/+$/, "");
+}
+
+async function enablePush() {
+  const p = state.data.settings.push;
+  if (!pushSupported()) {
+    toast("この環境ではプッシュ通知を使えません（iPhoneはホーム画面に追加したうえで開いてください）");
+    return;
+  }
+  if (!pushServerBase() || !p.vapidPublicKey.trim()) {
+    toast("先に送信役のURLとVAPID公開鍵を保存してください");
+    return;
+  }
+  try {
+    const perm = await Notification.requestPermission();
+    if (perm !== "granted") { toast("通知が許可されませんでした"); return; }
+    const reg = await navigator.serviceWorker.ready;
+    // 公開鍵を変えた場合に備え、既存購読があれば作り直す
+    const existing = await reg.pushManager.getSubscription();
+    if (existing) await existing.unsubscribe().catch(() => {});
+    const sub = await reg.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: urlBase64ToUint8Array(p.vapidPublicKey.trim())
+    });
+    const res = await fetch(pushServerBase() + "/subscribe", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        subscription: sub.toJSON(),
+        time: state.data.settings.reminderTime || "21:00",
+        tz: Intl.DateTimeFormat().resolvedOptions().timeZone || "Asia/Tokyo"
+      })
+    });
+    if (!res.ok) throw new Error(`送信役への登録に失敗しました (${res.status})`);
+    p.enabled = true;
+    p.endpoint = sub.endpoint;
+    saveData(); render();
+    toast("プッシュ通知を有効にしました");
+  } catch (err) {
+    toast("有効化に失敗: " + err.message);
+    console.error(err);
+  }
+}
+
+async function disablePush() {
+  const p = state.data.settings.push;
+  try {
+    if ("serviceWorker" in navigator) {
+      const reg = await navigator.serviceWorker.ready;
+      const sub = await reg.pushManager.getSubscription();
+      if (sub) {
+        const endpoint = sub.endpoint;
+        await sub.unsubscribe().catch(() => {});
+        if (pushServerBase()) {
+          // 送信役からも購読を消す（失敗しても購読解除は済んでいるので握りつぶす）
+          fetch(pushServerBase() + "/unsubscribe", {
+            method: "POST", headers: { "content-type": "application/json" },
+            body: JSON.stringify({ endpoint })
+          }).catch(() => {});
+        }
+      }
+    }
+  } catch (err) {
+    console.warn("disablePush:", err.message);
+  }
+  p.enabled = false;
+  p.endpoint = null;
+  saveData(); render();
+  toast("プッシュ通知を無効にしました");
+}
+
+// 有効時に希望時刻を変えたら、送信役の登録時刻も更新する
+async function updatePushTime() {
+  const p = state.data.settings.push;
+  if (!p.enabled || !pushServerBase() || !p.endpoint) return;
+  try {
+    await fetch(pushServerBase() + "/subscribe", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        endpoint: p.endpoint,
+        time: state.data.settings.reminderTime || "21:00",
+        tz: Intl.DateTimeFormat().resolvedOptions().timeZone || "Asia/Tokyo"
+      })
+    });
+  } catch (err) { console.warn("updatePushTime:", err.message); }
+}
+
+// 送信役の /test を叩いて、その場でテスト通知を送ってもらう（設定確認用）
+async function sendTestPush() {
+  const p = state.data.settings.push;
+  if (!p.enabled || !p.endpoint) { toast("先にプッシュ通知を有効にしてください"); return; }
+  try {
+    const res = await fetch(pushServerBase() + "/test", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ endpoint: p.endpoint })
+    });
+    if (!res.ok) throw new Error(`(${res.status})`);
+    toast("テスト通知を送りました。数秒待っても来なければ通知許可を確認してください");
+  } catch (err) {
+    toast("テスト送信に失敗: " + err.message);
   }
 }
 
@@ -2283,6 +2444,15 @@ document.addEventListener("click", e => {
     saveData();
     addReminder();
   }
+  else if (a === "save-push-config") {
+    state.data.settings.push.serverUrl = document.getElementById("pushServerUrl").value.trim();
+    state.data.settings.push.vapidPublicKey = document.getElementById("pushVapidKey").value.trim();
+    saveData(); render();
+    toast("送信役の設定を保存しました");
+  }
+  else if (a === "enable-push") { enablePush(); }
+  else if (a === "disable-push") { disablePush(); }
+  else if (a === "test-push") { sendTestPush(); }
   else if (a === "backup-later") {
     state.data.settings.backupSnoozedUntil = addDays(todayStr(), BACKUP_SNOOZE_DAYS);
     saveData(); render();
@@ -2337,6 +2507,7 @@ document.addEventListener("change", e => {
   } else if (e.target.id === "reminderTime" && /^\d{2}:\d{2}$/.test(e.target.value)) {
     state.data.settings.reminderTime = e.target.value;   // 登録ボタンを押す前でも希望時刻を保持
     saveData();
+    updatePushTime();   // プッシュが有効なら送信役の配信時刻も追従させる
   }
 });
 

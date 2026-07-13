@@ -1,0 +1,22 @@
+name = "ai-journal-push"
+main = "src/worker.js"
+compatibility_date = "2024-11-01"
+
+# 購読の保存先（KV）。下の id は自分で作った名前空間のIDに置き換える。
+#   npx wrangler kv namespace create SUBS
+# を実行すると id が表示されるので、それをここに貼る。
+[[kv_namespaces]]
+binding = "SUBS"
+id = "ここにKV名前空間IDを貼る"
+
+# 毎分チェックして、各購読の希望時刻を過ぎたらその日1回だけ通知する。
+# 実行回数を減らしたいなら "*/5 * * * *"（5分ごと・誤差最大5分）でも十分。
+[triggers]
+crons = ["* * * * *"]
+
+# VAPID_SUBJECT はメールでもURLでも可。公開鍵/秘密鍵はシークレットで設定する:
+#   npx wrangler secret put VAPID_PUBLIC_KEY
+#   npx wrangler secret put VAPID_PRIVATE_KEY
+#   npx wrangler secret put VAPID_SUBJECT      （例: mailto:you@example.com）
+[vars]
+ALLOW_ORIGIN = "https://shimi-works.github.io"
