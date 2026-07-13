@@ -1,7 +1,7 @@
 // AI Journal Service Worker — オフラインでも起動できるようにする
 // 方針: 同一オリジンのGETは stale-while-revalidate（キャッシュを即返し、裏で更新）。
 //       Gemini・Open-Meteo等の外部APIには関与しない（ネットワーク直）。
-const CACHE = "ai-journal-v17";  // 既定VAPID公開鍵を更新（鍵ペア再生成に伴う）
+const CACHE = "ai-journal-v18";  // テスト送信の失敗理由（送信先の応答）を表示
 const APP_URL = "./";
 const ASSETS = ["./", "./index.html", "./manifest.webmanifest", "./icon-192.png", "./icon-512.png", "./icon-180.png"];
 

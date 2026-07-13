@@ -43,13 +43,45 @@ function vapidFrom(env) {
   };
 }
 
+function b64urlToBytes(s) {
+  s = s.replace(/-/g, "+").replace(/_/g, "/");
+  const pad = "=".repeat((4 - s.length % 4) % 4);
+  const bin = atob(s + pad);
+  const a = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) a[i] = bin.charCodeAt(i);
+  return a;
+}
+function bytesToB64url(b) {
+  let s = "";
+  for (const x of b) s += String.fromCharCode(x);
+  return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+// 秘密鍵(d)が公開鍵と同じ鍵ペアかを判定（WebCryptoは不一致のJWKを弾く）
+async function checkVapidPair(env) {
+  if (!env.VAPID_PUBLIC_KEY || !env.VAPID_PRIVATE_KEY) return "鍵が未設定";
+  try {
+    const pub = b64urlToBytes(env.VAPID_PUBLIC_KEY);
+    await crypto.subtle.importKey("jwk", {
+      kty: "EC", crv: "P-256",
+      x: bytesToB64url(pub.slice(1, 33)), y: bytesToB64url(pub.slice(33, 65)),
+      d: env.VAPID_PRIVATE_KEY, ext: true, key_ops: ["sign"]
+    }, { name: "ECDSA", namedCurve: "P-256" }, false, ["sign"]);
+    return "OK";
+  } catch (e) {
+    return "MISMATCH: " + String((e && e.message) || e);
+  }
+}
+
 async function sendTo(rec, env, msg) {
   const payload = await buildPushPayload(
     { data: msg, options: { ttl: 12 * 60 * 60, urgency: "normal" } },
     rec.subscription, vapidFrom(env)
   );
   const res = await fetch(rec.subscription.endpoint, payload);
-  return res.status;
+  let detail = "";
+  if (!res.ok) { try { detail = (await res.text()).slice(0, 300); } catch (_) {} }
+  return { status: res.status, detail };
 }
 
 // 指定タイムゾーンの「今日の日付」と「現在のHH:MM」を返す
@@ -69,8 +101,14 @@ export default {
     if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: cors(env) });
 
     if (req.method === "GET" && url.pathname === "/") {
-      // 動作確認用。VAPID公開鍵も返すのでアプリに貼るときの控えに使える
-      return json({ ok: true, service: "ai-journal-push", vapidPublicKey: env.VAPID_PUBLIC_KEY || null }, 200, env);
+      // 動作確認＋鍵の自己診断。keyPair が OK なら公開鍵と秘密鍵は整合している
+      return json({
+        ok: true, service: "ai-journal-push",
+        vapidPublicKey: env.VAPID_PUBLIC_KEY || null,
+        hasPrivate: !!env.VAPID_PRIVATE_KEY,
+        subject: env.VAPID_SUBJECT || null,
+        keyPair: await checkVapidPair(env)
+      }, 200, env);
     }
 
     if (req.method === "POST" && url.pathname === "/subscribe") {
@@ -115,8 +153,8 @@ export default {
       const rec = await env.SUBS.get(await keyFor(b.endpoint), "json");
       if (!rec) return json({ error: "not found" }, 404, env);
       try {
-        const status = await sendTo(rec, env, { ...DEFAULT_MSG, body: "テスト通知です。これが届けば設定完了！" });
-        return json({ ok: true, status }, 200, env);
+        const r = await sendTo(rec, env, { ...DEFAULT_MSG, body: "テスト通知です。これが届けば設定完了！" });
+        return json({ ok: true, status: r.status, detail: r.detail }, 200, env);
       } catch (e) {
         return json({ error: String((e && e.message) || e) }, 500, env);
       }
@@ -141,8 +179,8 @@ async function runDaily(env) {
       if (rec.lastSent === now.date) continue;          // 今日は送信済み
       if (now.hm < (rec.time || "21:00")) continue;     // まだ予定時刻より前
       try {
-        const status = await sendTo(rec, env, DEFAULT_MSG);
-        if (status === 404 || status === 410) {         // 失効した購読は掃除する
+        const r = await sendTo(rec, env, DEFAULT_MSG);
+        if (r.status === 404 || r.status === 410) {      // 失効した購読は掃除する
           await env.SUBS.delete(key.name);
           continue;
         }

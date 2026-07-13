@@ -2213,7 +2213,7 @@ async function sendTestPush() {
     if (!res.ok) { toast("テスト送信に失敗: " + (body.error || `(${res.status})`)); return; }
     // 送信役は届けたが、プッシュサービスが受け付けなかった場合（VAPID鍵の不一致など）
     if (body.status && (body.status < 200 || body.status >= 300)) {
-      toast(`送信先が受け付けませんでした (${body.status})。通知の許可か鍵の設定を確認してください`); return;
+      toast(`送信先が受け付けませんでした (${body.status})` + (body.detail ? `: ${body.detail}` : "")); return;
     }
     toast("テスト通知を送りました。数秒待っても来なければ通知許可を確認してください");
   } catch (err) {
