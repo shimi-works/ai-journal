@@ -1,13 +1,15 @@
 name = "ai-journal-push"
 main = "src/worker.js"
 compatibility_date = "2024-11-01"
+# 依存ライブラリが node:crypto を参照する箇所への保険（実行時はWeb Cryptoを使うが念のため）
+compatibility_flags = ["nodejs_compat"]
 
 # 購読の保存先（KV）。下の id は自分で作った名前空間のIDに置き換える。
 #   npx wrangler kv namespace create SUBS
 # を実行すると id が表示されるので、それをここに貼る。
 [[kv_namespaces]]
 binding = "SUBS"
-id = "ここにKV名前空間IDを貼る"
+id = "4d20a9ab70874d8ba1d1172188a4b57e"
 
 # 毎分チェックして、各購読の希望時刻を過ぎたらその日1回だけ通知する。
 # 実行回数を減らしたいなら "*/5 * * * *"（5分ごと・誤差最大5分）でも十分。

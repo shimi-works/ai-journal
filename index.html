@@ -2141,7 +2141,11 @@ async function enablePush() {
         tz: Intl.DateTimeFormat().resolvedOptions().timeZone || "Asia/Tokyo"
       })
     });
-    if (!res.ok) throw new Error(`送信役への登録に失敗しました (${res.status})`);
+    if (!res.ok) {
+      let detail = `(${res.status})`;
+      try { const b = await res.json(); if (b.error) detail = b.error; } catch (_) {}
+      throw new Error("送信役への登録に失敗: " + detail);
+    }
     p.enabled = true;
     p.endpoint = sub.endpoint;
     saveData(); render();
@@ -2204,7 +2208,13 @@ async function sendTestPush() {
       method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({ endpoint: p.endpoint })
     });
-    if (!res.ok) throw new Error(`(${res.status})`);
+    let body = {};
+    try { body = await res.json(); } catch (_) {}
+    if (!res.ok) { toast("テスト送信に失敗: " + (body.error || `(${res.status})`)); return; }
+    // 送信役は届けたが、プッシュサービスが受け付けなかった場合（VAPID鍵の不一致など）
+    if (body.status && (body.status < 200 || body.status >= 300)) {
+      toast(`送信先が受け付けませんでした (${body.status})。通知の許可か鍵の設定を確認してください`); return;
+    }
     toast("テスト通知を送りました。数秒待っても来なければ通知許可を確認してください");
   } catch (err) {
     toast("テスト送信に失敗: " + err.message);
