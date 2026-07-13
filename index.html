@@ -1173,7 +1173,13 @@ const ICON_PATHS = {
   save: '<line x1="12" y1="4" x2="12" y2="14"/><polyline points="8.2 10.4 12 14.2 15.8 10.4"/><path d="M5 17v2.5h14V17"/>',
   palette: '<path d="M12 3a9 9 0 1 0 0 18c1.2 0 2-.9 2-2 0-.5-.2-1-.5-1.3-.3-.4-.5-.8-.5-1.3 0-1.1.9-2 2-2h2.2A3.8 3.8 0 0 0 21 10.7 8.8 8.8 0 0 0 12 3z"/><circle cx="7.8" cy="10.6" r="1" fill="currentColor" stroke="none"/><circle cx="12" cy="7.4" r="1" fill="currentColor" stroke="none"/><circle cx="16.2" cy="10.6" r="1" fill="currentColor" stroke="none"/>',
   flame: '<path d="M12 3c.6 3-1.8 4.2-3 6-1.4 2-1.5 4.4-.2 6.3A4.8 4.8 0 0 0 17 14c0-1.6-.8-2.8-1.5-3.8C17 11 18 12.5 18 14.5a6 6 0 1 1-11.4-2.6C7.8 9 10.5 8 12 3z"/>',
-  bulb: '<path d="M9 18h6"/><path d="M10 21h4"/><path d="M8.4 14.5A5.5 5.5 0 1 1 15.6 14.5c-.7.7-1.1 1.3-1.1 2.2H9.5c0-.9-.4-1.5-1.1-2.2z"/>'
+  bulb: '<path d="M9 18h6"/><path d="M10 21h4"/><path d="M8.4 14.5A5.5 5.5 0 1 1 15.6 14.5c-.7.7-1.1 1.3-1.1 2.2H9.5c0-.9-.4-1.5-1.1-2.2z"/>',
+  bell: '<path d="M6.4 9.5a5.6 5.6 0 0 1 11.2 0c0 4.4 1.6 5.6 1.6 5.6H4.8s1.6-1.2 1.6-5.6z"/><path d="M10 19a2 2 0 0 0 4 0"/>',
+  trash: '<polyline points="4.5 7 19.5 7"/><path d="M9.2 7V5.4A1.4 1.4 0 0 1 10.6 4h2.8a1.4 1.4 0 0 1 1.4 1.4V7"/><path d="M6.8 7l.9 12a1.5 1.5 0 0 0 1.5 1.4h5.6a1.5 1.5 0 0 0 1.5-1.4l.9-12"/><line x1="10.2" y1="10.5" x2="10.5" y2="17"/><line x1="13.8" y1="10.5" x2="13.5" y2="17"/>',
+  check: '<polyline points="4.5 12.5 9.8 18 19.5 6.5"/>',
+  share: '<line x1="12" y1="4" x2="12" y2="15"/><polyline points="8 8 12 4 16 8"/><path d="M6 12.5V18a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2v-5.5"/>',
+  phone: '<rect x="7" y="3" width="10" height="18" rx="2.2"/><line x1="10.6" y1="18" x2="13.4" y2="18"/>',
+  desktop: '<rect x="3" y="5" width="18" height="11" rx="1.6"/><line x1="9" y1="20" x2="15" y2="20"/><line x1="12" y1="16" x2="12" y2="20"/>'
 };
 function icon(name, size = 18, cls = "") {
   return `<svg class="icn ${cls}" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICON_PATHS[name]}</svg>`;
@@ -1326,13 +1332,13 @@ function backupBannerHTML() {
 // 新しいお知らせを出すときは id を変える（過去に閉じた人にも再表示される）。
 const CURRENT_NOTICE = {
   id: "notify-2026-07",
-  title: "🔔 新機能：毎日のリマインダー通知",
+  title: "新機能：毎日のリマインダー通知",
   body: "書き忘れ防止に、決まった時刻へ「日記を書こう」と通知できるようになりました。設定はかんたん、押すだけです。"
 };
 function noticeBannerHTML() {
   if (state.data.settings.lastSeenNotice === CURRENT_NOTICE.id) return "";
   return `<div class="card notice-card">
-    <div class="notice-title">${esc(CURRENT_NOTICE.title)}</div>
+    <div class="notice-title">${icon("bell", 16)} ${esc(CURRENT_NOTICE.title)}</div>
     <div class="notice-body">${esc(CURRENT_NOTICE.body)}</div>
     <div class="notice-actions">
       <button class="primary" data-action="open-push-settings">通知を設定する</button>
@@ -1366,7 +1372,7 @@ function renderList() {
     <h1>日記</h1>
     <button class="search-lbl" data-action="go-search" title="検索" aria-label="検索">${icon("search", 14)} 単語検索</button></div>`;
   if (!entries.length) {
-    return `${bar}<div class="empty-note">まだ日記がありません。<br>右下の ✎ から最初の1日を書いてみましょう。<br><br>使い方は左上の「❓ ヘルプ」からいつでも見られます。</div>`;
+    return `${bar}<div class="empty-note">まだ日記がありません。<br>右下の ${icon("pen", 14)} から最初の1日を書いてみましょう。<br><br>使い方は左上の「${icon("help", 13)} ヘルプ」からいつでも見られます。</div>`;
   }
   // 月ごとにグループ化してから描画する
   const byMonth = new Map();
@@ -1490,31 +1496,31 @@ function renderHelp() {
         （天気の場所は初期設定で仙台。旅行のときは設定から変更できます）。</p>
         <p>AIやネットがなくても、書く・読む・検索・バックアップは全部動きます。データはこの端末の中だけに保存されます。</p>`, true)}
       ${sec("pen", "日記を書く", `
-        <p>右下の <b>✎ ボタン</b>から。書くのは<b>タイトル（なくてもOK）と本文だけ</b>。</p>
+        <p>右下の <b>${icon("pen", 14)} ボタン</b>から。書くのは<b>タイトル（なくてもOK）と本文だけ</b>。</p>
         <p>最初の「何点だった？」「気分は？」は<b>タップだけ・任意</b>です（もう一度タップで解除）。
         点数と気分を入れておくと、グラフやカレンダーが育ちます。</p>
         <p><b>過去の日の日記</b>も書けます: 上の日付をタップするとカレンダーが出るので、書きたい日を選ぶだけ（‹ ›で1日ずつも動けます）。</p>
         <p>キーボードなら <span class="key">Ctrl+Enter</span> で保存、<span class="key">Esc</span> で戻れます。</p>`)}
       ${sec("list", "読む・編集する・AIをやり直す", `
-        <p>リストのカードをタップすると日記が開きます。右上の <b>✎</b> で編集、<b>🗑</b> で削除。</p>
-        <p>日記の下にAIの要約とタグが表示されます。付いていないときは「🤖 AIで要約・タグ付け」、
+        <p>リストのカードをタップすると日記が開きます。右上の <b>${icon("pen", 13)}</b> で編集、<b>${icon("trash", 13)}</b> で削除。</p>
+        <p>日記の下にAIの要約とタグが表示されます。付いていないときは「${icon("sparkles", 13)} AIで要約・タグ付け」、
         気に入らなければ「AIをやり直す」でいつでも作り直せます。本文を編集すると自動で作り直されます。</p>`)}
       ${sec("refresh", "振り返り（週・月・年のまとめ）", `
         <p>「振り返り」タブで週間・月間・年間を切り替えると、期間ごとに件数・平均点・気分平均が並びます。</p>
         <p><b>「AIまとめを生成」</b>を押すと「今週は〜な週でした」という振り返り文をAIが書きます。
         日記が増えたら「再生成」で書き直せます。</p>
-        <p>リストの上に出る<b>「🕰 今日のこの日」</b>は、1年前・2年前の同じ日の日記です。</p>`)}
+        <p>リストの上に出る<b>「${icon("clock", 13)} 今日のこの日」</b>は、1年前・2年前の同じ日の日記です。</p>`)}
       ${sec("chart", "カレンダー・グラフ・検索", `
         <p><b>カレンダー</b>: 書いた日に気分の絵文字が付きます。タップでその日の日記へ。</p>
         <p><b>グラフ</b>: 点数と気分の推移。30日/90日/全期間で切替、点にタッチすると日付と値が出ます。</p>
-        <p><b>検索</b>: リスト右上の「🔍 単語検索」。言葉だけでなく<b>日付でも</b>探せます
+        <p><b>検索</b>: リスト右上の「${icon("search", 13)} 単語検索」。言葉だけでなく<b>日付でも</b>探せます
         （「7月8日」「2026-07-08」「7月」など）。</p>`)}
       ${sec("sparkles", "AI機能を使う（初回設定）", `
         <p>AIの要約・まとめには<b>Gemini APIキー（無料）</b>が必要です。</p>
         <p>設定 → Gemini APIキーの「Google AI Studio」リンクからキーを作成 → 貼り付けて保存。これだけです。</p>
         <p>無料枠の上限に当たったときは自動で別モデルに切り替わります。キーが無くても日記アプリとしては全部使えます。</p>`)}
       ${sec("calendar", "Googleカレンダーの予定を挿入", `
-        <p>設定の「Googleカレンダー連携」を済ませると、書く画面に<b>「📅 予定を挿入」</b>ボタンが出ます。
+        <p>設定の「Googleカレンダー連携」を済ませると、書く画面に<b>「${icon("calendar", 13)} 予定を挿入」</b>ボタンが出ます。
         タップするとその日の予定が本文の先頭に入るので、感想を書き足すだけで日記になります。</p>
         <p>初回設定の手順（Google Cloudで無料のクライアントIDを作る・約5分）は設定画面の中にあります。予定は読み取り専用です。</p>`)}
       ${sec("save", "バックアップ（大事）", `
@@ -1523,10 +1529,10 @@ function renderHelp() {
         <p>バックアップしないまま7日たつと、リストにお知らせが出ます。復元は「JSONからインポート」、他の日記アプリからの引っ越しは「テキスト/Markdownから追加インポート」で。</p>`)}
       ${sec("flame", "続ける仕組み（連続記録）", `
         <p>今日まだ書いていない日は、リストの一番上に<b>「連続◯日で継続中。今日書けば◯日に伸びます」</b>とだけ出ます。書けば消えるので、通知でせかされる感じはありません。</p>
-        <p>3日・5日・7日…と続けると保存時に<b>🔥お祝い</b>が出ます。<b>グラフ</b>タブに現在の連続日数と最長記録も出ます。<b>1日空いても記録はゼロに戻るだけで、日記は消えません</b>。気楽にまた始めればOKです。</p>
+        <p>3日・5日・7日…と続けると保存時に<b>${icon("flame", 13)}お祝い</b>が出ます。<b>グラフ</b>タブに現在の連続日数と最長記録も出ます。<b>1日空いても記録はゼロに戻るだけで、日記は消えません</b>。気楽にまた始めればOKです。</p>
         <p>さらに確実にしたいときは、下の<b>「毎日のリマインダー」</b>をカレンダーに登録しておくと毎日通知が来ます。</p>`)}
       ${sec("bulb", "ネタ帳（会話のネタをストック）", `
-        <p>日記を保存すると、AIが要約と一緒に<b>「人に話したくなる話題」</b>を拾って<b>ネタ帳</b>タブに貯めます。友達や家族と話す前にのぞいて、話したら<b>「話した ✓」</b>を押すと済みに移ります。</p>
+        <p>日記を保存すると、AIが要約と一緒に<b>「人に話したくなる話題」</b>を拾って<b>ネタ帳</b>タブに貯めます。友達や家族と話す前にのぞいて、話したら<b>「話した ${icon("check", 12)}」</b>を押すと済みに移ります。</p>
         <p>APIキーを設定する前に書いた過去の日記は、ネタ帳の<b>「過去の日記からネタを抽出」</b>ボタンでまとめて拾えます（無料枠を守るため一度に10件ずつ）。</p>`)}
       ${sec("clock", "毎日のリマインダー（書き忘れ防止）", `
         <p>設定に通知が<b>2種類</b>あります。まず希望の<b>時刻</b>を選んでから、使いたい方を設定します。</p>
@@ -1672,8 +1678,8 @@ function renderEntry() {
     <div class="topbar">
       <button class="icon-btn" data-action="back" title="戻る" aria-label="戻る">←</button>
       <span>
-        <button class="icon-btn" data-action="edit-entry" title="編集" aria-label="編集">✎</button>
-        <button class="icon-btn" data-action="delete-entry" title="削除" aria-label="削除">🗑</button>
+        <button class="icon-btn" data-action="edit-entry" title="編集" aria-label="編集">${icon("pen", 17)}</button>
+        <button class="icon-btn" data-action="delete-entry" title="削除" aria-label="削除">${icon("trash", 17)}</button>
       </span>
     </div>
     <div class="entry-view">
@@ -1734,7 +1740,7 @@ function topicItemHTML(t, isUsed) {
       <span class="bulb-mark">${icon("bulb", 14)}</span> ${esc(t.text)}
       <span class="topic-date">${esc(label)}</span>
     </button>
-    <button class="topic-check" data-action="topic-used" data-key="${esc(t.key)}">${isUsed ? "戻す" : "話した ✓"}</button>
+    <button class="topic-check" data-action="topic-used" data-key="${esc(t.key)}">${isUsed ? "戻す" : `話した ${icon("check", 13)}`}</button>
   </div>`;
 }
 
@@ -2004,10 +2010,10 @@ function renderSettings() {
           : `<button class="primary" data-action="enable-push" style="padding:12px">通知を有効にする</button>
              <div class="label">押して通知を許可すると、毎日 <b>${esc(s.reminderTime)}</b> ごろに通知が届きます。うまくいかないときは、下のお使いの端末の手順を見てください。</div>`}
         <details>
-          <summary class="label" style="cursor:pointer">📱 iPhone（iPad）の人はこちら</summary>
+          <summary class="label" style="cursor:pointer">${icon("phone", 14)} iPhone（iPad）の人はこちら</summary>
           <ol style="font-size:13px;color:var(--muted);padding-left:20px;line-height:1.9;margin:6px 0 0">
             <li><b>Safari</b>でこのアプリを開く（Chromeアプリではなく標準のSafari）</li>
-            <li>下の共有ボタン <b>⬆️</b> を押す</li>
+            <li>下の共有ボタン ${icon("share", 14)} を押す</li>
             <li>「<b>ホーム画面に追加</b>」を選ぶ</li>
             <li>ホーム画面にできた<b>アイコンから起動</b>する（← これが必須。Safariのタブのままだと通知は使えません）</li>
             <li>この設定②で「通知を有効にする」→「許可」</li>
@@ -2015,7 +2021,7 @@ function renderSettings() {
           <div class="label" style="margin-top:6px">iPhoneはApple側の仕様で、ホーム画面に追加したアプリからでないとプッシュ通知を使えません（iOS 16.4以上が必要）。</div>
         </details>
         <details>
-          <summary class="label" style="cursor:pointer">🤖 Android / 💻 パソコンの人はこちら</summary>
+          <summary class="label" style="cursor:pointer">${icon("phone", 14)} Android / ${icon("desktop", 14)} パソコンの人はこちら</summary>
           <div class="label" style="margin-top:6px"><b>そのままでOK</b>です。ChromeやEdgeでこのページを開いて、上の「通知を有効にする」を押し、通知を「許可」するだけで届きます。ホーム画面/デスクトップに追加すると、より安定して受け取れます（任意）。</div>
         </details>
         <details>
@@ -2343,8 +2349,8 @@ function handleSave() {
   const st = calcStreak();
   if (savedDate === todayStr() && st.current >= 2) {
     toast(STREAK_MILESTONES.includes(st.current)
-      ? `🔥 ${st.current}日連続達成！すごい！`
-      : `保存しました（🔥${st.current}日連続）`);
+      ? `${st.current}日連続達成！すごい！`
+      : `保存しました（${st.current}日連続）`);
   } else {
     toast("保存しました");
   }
