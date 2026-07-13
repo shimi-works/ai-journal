@@ -1939,22 +1939,22 @@ function renderSettings() {
       <select id="modelSelect">${models}</select>
     </div>
     <div class="settings-row">
-      <div class="label">Googleカレンダー連携${s.googleClientId ? "（設定済み）" : "（未設定）"}・書く画面に「予定を挿入」ボタンが出ます</div>
-      <div class="stack">
-        <input type="text" id="gcalClientId" value="${esc(s.googleClientId)}" placeholder="xxxx.apps.googleusercontent.com" autocomplete="off">
-        <button class="ghost" data-action="save-gcal">クライアントIDを保存</button>
-        <details>
-          <summary class="label" style="cursor:pointer">取得手順（初回のみ・約5分・無料）</summary>
-          <ol style="font-size:13px;color:var(--muted);padding-left:20px;line-height:1.9">
+      <details${s.googleClientId ? " open" : ""}>
+        <summary class="label" style="cursor:pointer">Googleカレンダー連携（上級者・任意）${s.googleClientId ? "・設定済み" : ""}</summary>
+        <div class="stack" style="margin-top:8px">
+          <div class="label" style="margin:0">書く画面に「予定を挿入」ボタンが出て、その日のGoogleカレンダーの予定を日記に取り込めます（読み取り専用）。利用にはGoogle側でOAuthクライアントIDの作成が必要です（下記手順）。設定しなくても日記は問題なく使えます。</div>
+          <input type="text" id="gcalClientId" value="${esc(s.googleClientId)}" placeholder="クライアントID（xxxx.apps.googleusercontent.com）" autocomplete="off">
+          <button class="ghost" data-action="save-gcal">クライアントIDを保存</button>
+          <ol style="font-size:13px;color:var(--muted);padding-left:20px;line-height:1.9;margin:0">
             <li><a href="https://console.cloud.google.com/" target="_blank" rel="noopener">Google Cloud Console</a> でプロジェクトを作成</li>
             <li>「APIとサービス → ライブラリ」で <b>Google Calendar API</b> を有効化</li>
             <li>「OAuth同意画面」を外部で作成し、テストユーザーに自分のGmailを追加</li>
             <li>「認証情報 → OAuthクライアントID → ウェブアプリケーション」を作成し、<br>承認済みのJavaScript生成元に <code>https://shimi-works.github.io</code> を追加</li>
             <li>発行されたクライアントIDを上の欄に貼って保存</li>
           </ol>
-        </details>
-        <div class="label">予定は読み取り専用（readonly）で、この端末のメモリにしか保持しません</div>
-      </div>
+          <div class="label">予定は読み取り専用（readonly）で、この端末のメモリにしか保持しません</div>
+        </div>
+      </details>
     </div>
     <div class="settings-row">
       <div class="label">毎日のリマインダー（書き忘れ防止）・希望時刻</div>

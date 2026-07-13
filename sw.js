@@ -1,7 +1,7 @@
 // AI Journal Service Worker — オフラインでも起動できるようにする
 // 方針: 同一オリジンのGETは stale-while-revalidate（キャッシュを即返し、裏で更新）。
 //       Gemini・Open-Meteo等の外部APIには関与しない（ネットワーク直）。
-const CACHE = "ai-journal-v14";  // テスト送信のエラー詳細を表示するよう改善
+const CACHE = "ai-journal-v15";  // Googleカレンダー連携を上級者向けの折りたたみへ
 const APP_URL = "./";
 const ASSETS = ["./", "./index.html", "./manifest.webmanifest", "./icon-192.png", "./icon-512.png", "./icon-180.png"];
 
