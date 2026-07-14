@@ -474,7 +474,8 @@ const state = {
   calMonth: null,      // カレンダー表示月 "YYYY-MM"
   popMonth: null,      // write画面の日付選択ポップアップの表示月 "YYYY-MM"
   searchQuery: "",
-  extracting: null     // ネタ帳の一括抽出中 { done, total }（連打防止と進捗表示）
+  extracting: null,    // ネタ帳の一括抽出中 { done, total }（連打防止と進捗表示）
+  bioAvail: false      // この端末で顔認証/指紋（WebAuthn）が使えるか（起動時に非同期判定）
 };
 
 // ===== storage層 =====
@@ -594,6 +595,76 @@ async function verifyCurrentPass() {
     return false;
   }
   return true;
+}
+
+// ===== 顔認証・指紋でのロック解除（WebAuthn = Face ID / Windows Hello） =====
+// 顔や指紋そのものはOSが管理しアプリには一切渡らない。ここでは「OSの本人確認に成功したか」
+// だけを見る（パスワードロックと同じ覗き見防止の割り切り）。認証情報は端末固有なので、
+// 同期やバックアップJSONに乗らないよう state.data の外の専用キーに保存する。
+const BIO_KEY = "ai-journal-bio";
+
+function bioRec() {
+  try { return JSON.parse(localStorage.getItem(BIO_KEY)); } catch { return null; }
+}
+function bufToB64url(buf) {
+  return btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+function b64urlToBuf(s) {
+  const b = atob(String(s).replace(/-/g, "+").replace(/_/g, "/"));
+  const a = new Uint8Array(b.length);
+  for (let i = 0; i < b.length; i++) a[i] = b.charCodeAt(i);
+  return a.buffer;
+}
+async function detectBioAvailable() {
+  try {
+    return !!(window.PublicKeyCredential &&
+      await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable());
+  } catch { return false; }
+}
+async function bioEnable() {
+  if (!await verifyCurrentPass()) return;
+  try {
+    const cred = await navigator.credentials.create({ publicKey: {
+      challenge: crypto.getRandomValues(new Uint8Array(32)),
+      rp: { name: "AI Journal" },
+      user: { id: crypto.getRandomValues(new Uint8Array(16)), name: "日記の持ち主", displayName: "日記の持ち主" },
+      pubKeyCredParams: [{ type: "public-key", alg: -7 }, { type: "public-key", alg: -257 }],
+      authenticatorSelection: { authenticatorAttachment: "platform", userVerification: "required" },
+      timeout: 60000,
+      attestation: "none"
+    } });
+    localStorage.setItem(BIO_KEY, JSON.stringify({ credId: bufToB64url(cred.rawId) }));
+    render();
+    toast("顔認証・指紋でのロック解除を有効にしました（この端末のみ）");
+  } catch (e) {
+    console.error(e);
+    if (e.name !== "NotAllowedError") toast("顔認証を設定できませんでした");
+  }
+}
+function bioDisable() {
+  localStorage.removeItem(BIO_KEY);
+  render();
+  toast("顔認証でのロック解除を無効にしました");
+}
+let bioBusy = false;   // 認証ダイアログの二重起動防止
+async function bioUnlock() {
+  const rec = bioRec();
+  if (!rec || !rec.credId || bioBusy) return;
+  bioBusy = true;
+  try {
+    await navigator.credentials.get({ publicKey: {
+      challenge: crypto.getRandomValues(new Uint8Array(32)),
+      allowCredentials: [{ type: "public-key", id: b64urlToBuf(rec.credId), transports: ["internal"] }],
+      userVerification: "required",
+      timeout: 60000
+    } });
+    state.view = "list";
+    render();
+  } catch (e) {
+    console.error(e);
+    // キャンセル(NotAllowedError)は黙って戻す。それ以外はパスワードでの救済を案内
+    if (e.name !== "NotAllowedError") toast("顔認証で開けませんでした（パスワードでも開けます）");
+  } finally { bioBusy = false; }
 }
 
 function loadData() {
@@ -1549,6 +1620,7 @@ const ICON_PATHS = {
   search: '<circle cx="11" cy="11" r="6.3"/><line x1="15.7" y1="15.7" x2="20" y2="20"/>',
   help: '<circle cx="12" cy="12" r="8.8"/><path d="M9.6 9.3a2.5 2.5 0 1 1 3.7 2.3c-.8.4-1.3.9-1.3 1.9"/><line x1="12" y1="16.4" x2="12" y2="16.6"/>',
   lock: '<rect x="5.5" y="11" width="13" height="9" rx="2"/><path d="M8.5 11V8a3.5 3.5 0 0 1 7 0v3"/>',
+  user: '<circle cx="12" cy="8.2" r="3.7"/><path d="M5 20c.8-3.6 3.7-5.4 7-5.4s6.2 1.8 7 5.4"/>',
   clock: '<circle cx="12" cy="12" r="8.4"/><polyline points="12 7.6 12 12 15 14"/>',
   sparkles: '<path d="M11 5.5l1.4 3.4 3.4 1.4-3.4 1.4L11 15.1l-1.4-3.4-3.4-1.4 3.4-1.4z"/><path d="M18 14.5l.8 1.9 1.9.8-1.9.8-.8 1.9-.8-1.9-1.9-.8 1.9-.8z"/>',
   pin: '<path d="M12 21s-6.5-5.5-6.5-10.3a6.5 6.5 0 0 1 13 0C18.5 15.5 12 21 12 21z"/><circle cx="12" cy="10.6" r="2.2"/>',
@@ -1935,6 +2007,7 @@ function renderHelp() {
       ${sec("lock", "パスワードロック", `
         <p>設定から<b>数字4桁</b>で設定できます。次からアプリを開くときに入力を求められます（4桁入れると自動で開きます）。</p>
         <p>忘れたら、ロック画面の「パスワードを忘れた場合」→「<b>リセット</b>」と入力すれば解除されます。<b>日記は消えません</b>。</p>
+        <p>パスワード設定後は、設定から<b>顔認証・指紋（Face ID / Windows Hello）でのロック解除</b>も有効にできます（端末ごとの設定・顔や指紋のデータがアプリに渡ることはありません）。</p>
         <p>※覗き見防止の簡易ロックです（データそのものの暗号化ではありません）。</p>`)}
       ${sec("palette", "見た目を変える", `
         <p>設定から<b>テーマカラー6色・文字サイズ（小/標準/大）・フォント（ゴシック/明朝/丸ゴシック）</b>を変えられます。</p>`)}
@@ -1948,6 +2021,7 @@ function renderLock() {
     <input type="password" id="lockPass" placeholder="4桁の数字" inputmode="numeric" pattern="[0-9]*"
       maxlength="4" autocomplete="one-time-code">
     <button class="primary" data-action="unlock">開く</button>
+    ${bioRec() ? `<button class="ghost" style="width:240px" data-action="bio-unlock">${icon("user", 16)} 顔認証・指紋で開く</button>` : ""}
     <button class="ghost" style="width:240px" data-action="forgot-pass">パスワードを忘れた場合</button>
   </div>`;
 }
@@ -2406,7 +2480,10 @@ function renderSettings() {
           maxlength="4" autocomplete="one-time-code">
         <button class="ghost" data-action="set-pass">${s.passcodeHash ? "パスワードを変更" : "パスワードを設定"}</button>
         ${s.passcodeHash ? `<button class="ghost" data-action="remove-pass">パスワードを解除</button>` : ""}
-        <div class="label">※覗き見防止の簡易ロックです（データ自体は暗号化されません）。忘れてもロック画面の「パスワードを忘れた場合」から解除でき、日記は消えません</div>
+        ${s.passcodeHash && state.bioAvail ? (bioRec()
+          ? `<button class="ghost" data-action="bio-disable">顔認証・指紋での解除を無効にする（この端末）</button>`
+          : `<button class="ghost" data-action="bio-enable">顔認証・指紋での解除を有効にする（この端末）</button>`) : ""}
+        <div class="label">※覗き見防止の簡易ロックです（データ自体は暗号化されません）。忘れてもロック画面の「パスワードを忘れた場合」から解除でき、日記は消えません${s.passcodeHash && state.bioAvail ? "。顔認証（Face ID・Windows Hello・指紋）は端末ごとの設定で、有効にするとロック画面に「顔認証・指紋で開く」ボタンが出ます" : ""}</div>
       </div>
     </div>
     <div class="settings-row">
@@ -3103,11 +3180,15 @@ document.addEventListener("click", e => {
     if (hit) { state.entryFrom = "calendar"; state.view = "entry"; state.entryId = hit.id; render(); }
   }
   else if (a === "unlock") { tryUnlock(); }
+  else if (a === "bio-unlock") { bioUnlock(); }
+  else if (a === "bio-enable") { bioEnable(); }
+  else if (a === "bio-disable") { bioDisable(); }
   else if (a === "forgot-pass") {
     // 覗き見防止の簡易ロックなので救済を優先する（誤タップで消えないよう合言葉入力）
     const word = prompt("ロックを解除します（日記データは消えません）。\nよろしければ「リセット」と入力してください");
     if (word !== "リセット") { if (word !== null) toast("入力が一致しません"); return; }
     state.data.settings.passcodeHash = null;
+    localStorage.removeItem(BIO_KEY);   // パスワードなしでは顔認証も意味を持たないので一緒に解除
     saveData();
     state.view = "list"; render();
     toast("パスワードを解除しました。必要なら設定から再設定してください");
@@ -3126,6 +3207,7 @@ document.addEventListener("click", e => {
     (async () => {
       if (!await verifyCurrentPass()) return;
       state.data.settings.passcodeHash = null;
+      localStorage.removeItem(BIO_KEY);   // パスワードなしでは顔認証も意味を持たないので一緒に解除
       saveData(); render();
       toast("パスワードを解除しました");
     })();
@@ -3328,6 +3410,11 @@ try {
 applyTheme();
 if (state.data.settings.passcodeHash) state.view = "lock";
 render();
+// 顔認証/指紋が使える端末か非同期で判定し、設定画面を開いていたら描き直す
+detectBioAvailable().then(v => {
+  state.bioAvail = v;
+  if (v && state.view === "settings") render();
+});
 syncInit();
 // ブラウザに「このサイトのデータを消さないで」と頼む（対応環境のみ。長期保存の保険）
 if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
