@@ -384,6 +384,7 @@ a.song-line:hover { border-color: var(--accent); }
 <div id="toast" role="status"></div>
 <input type="file" id="importFile" accept=".json,application/json" hidden>
 <input type="file" id="importTextFile" accept=".md,.txt,text/plain,text/markdown" hidden>
+<input type="file" id="importZipFile" accept=".zip,application/zip,application/x-zip-compressed" hidden>
 <input type="file" id="imageFile" accept="image/*" multiple hidden>
 <div id="lightbox" class="lightbox" hidden><img id="lightboxImg" alt="写真"></div>
 <script>
@@ -917,6 +918,169 @@ function importTextEntries(text) {
   state.view = "list";
   render();
   toast(`${added}件追加しました${skipped ? `（重複${skipped}件はスキップ）` : ""}`);
+}
+
+// ===== zipインポート（シンプル日記などのHTML+写真エクスポート） =====
+// 外部ライブラリなしでzipを読む。deflateの伸長はブラウザ標準のDecompressionStreamに任せる。
+// シンプル日記のエクスポートは「2026_4_10_Fri_00_38_Diary8/index.html + Attachment.png」という
+// 1日記=1フォルダ構造で、日付・時刻はフォルダ名から取れる。
+
+function zipEntries(buf) {
+  const view = new DataView(buf);
+  const u8 = new Uint8Array(buf);
+  // EOCD(末尾レコード)を後ろから探す。zipコメントは最大65535バイトなのでその範囲だけ見る
+  let eocd = -1;
+  const min = Math.max(0, buf.byteLength - 65558);
+  for (let i = buf.byteLength - 22; i >= min; i--) {
+    if (view.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
+  }
+  if (eocd < 0) throw new Error("zipファイルとして読めませんでした");
+  const count = view.getUint16(eocd + 10, true);
+  let off = view.getUint32(eocd + 16, true);
+  const utf8 = new TextDecoder("utf-8");
+  const entries = [];
+  for (let i = 0; i < count; i++) {
+    if (off + 46 > buf.byteLength || view.getUint32(off, true) !== 0x02014b50) break;
+    const method = view.getUint16(off + 10, true);
+    const csize = view.getUint32(off + 20, true);
+    const nameLen = view.getUint16(off + 28, true);
+    const extraLen = view.getUint16(off + 30, true);
+    const commentLen = view.getUint16(off + 32, true);
+    const localOff = view.getUint32(off + 42, true);
+    const name = utf8.decode(u8.subarray(off + 46, off + 46 + nameLen));
+    if (!name.endsWith("/")) entries.push({ name, method, csize, localOff });
+    off += 46 + nameLen + extraLen + commentLen;
+  }
+  return entries;
+}
+
+async function zipExtract(buf, entry, type) {
+  const view = new DataView(buf);
+  const o = entry.localOff;
+  if (view.getUint32(o, true) !== 0x04034b50) throw new Error("zipの構造が壊れています");
+  const nameLen = view.getUint16(o + 26, true);
+  const extraLen = view.getUint16(o + 28, true);
+  const start = o + 30 + nameLen + extraLen;
+  const comp = buf.slice(start, start + entry.csize);
+  if (entry.method === 0) return new Blob([comp], { type: type || "" });
+  if (entry.method !== 8) throw new Error("未対応の圧縮方式です");
+  const ds = new DecompressionStream("deflate-raw");
+  const blob = await new Response(new Blob([comp]).stream().pipeThrough(ds)).blob();
+  return type ? new Blob([blob], { type }) : blob;
+}
+
+const ZIP_IMG_MIME = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp" };
+
+// シンプル日記のindex.html（Cocoa HTML Writer）: 最初のp.p1がタイトル、以降のpが本文1行ずつ、
+// 写真は本文中の<img src="Attachment.png">。imgを抜いてからtextContentで文章だけ拾う
+function parseDiaryHtml(htmlText) {
+  const doc = new DOMParser().parseFromString(htmlText, "text/html");
+  const imgSrcs = [];
+  if (!doc.body) return { title: "", body: "", imgSrcs };
+  for (const img of doc.body.querySelectorAll("img")) {
+    const src = img.getAttribute("src") || "";
+    if (src && !/^(https?:|data:)/i.test(src)) {
+      try { imgSrcs.push(decodeURIComponent(src).split("/").pop()); } catch { imgSrcs.push(src.split("/").pop()); }
+    }
+    img.remove();
+  }
+  let title = "";
+  const lines = [];
+  const ps = [...doc.body.querySelectorAll("p")];
+  for (const p of ps) {
+    const text = p.textContent.replace(/\u00a0/g, " ").replace(/\s+$/, "");
+    if (!title && p.classList.contains("p1") && text.trim()) { title = text.trim(); continue; }
+    lines.push(text);
+  }
+  if (!ps.length) lines.push(doc.body.textContent.trim());
+  while (lines.length && !lines[0].trim()) lines.shift();
+  while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
+  return { title, body: lines.join("\n"), imgSrcs };
+}
+
+// フォルダ名 "2026_4_10_Fri_00_38_Diary8" → 日付2026-04-10・時刻00:38
+const ZIP_DIR_RE = /^(\d{4})_(\d{1,2})_(\d{1,2})_[A-Za-z]{3}_(\d{1,2})_(\d{2})(_|$)/;
+
+async function importZip(file) {
+  if (typeof DecompressionStream !== "function") {
+    toast("この端末のブラウザはzip展開に対応していません（バックアップJSONやテキストでのインポートをお使いください）");
+    return;
+  }
+  toast("zipを読み込んでいます…");
+  let buf, entries;
+  try {
+    buf = await file.arrayBuffer();
+    entries = zipEntries(buf);
+  } catch (e) { console.error(e); toast(e.message || "zipを読み込めませんでした"); return; }
+
+  // 日付つきフォルダごとに html と画像をまとめる
+  const diaries = new Map();
+  for (const en of entries) {
+    const parts = en.name.split("/");
+    const base = parts.pop();
+    let m = null;
+    for (const seg of parts) { m = seg.match(ZIP_DIR_RE); if (m) break; }
+    if (!m || !base) continue;
+    const dir = parts.join("/");
+    if (!diaries.has(dir)) diaries.set(dir, { m, html: null, images: new Map() });
+    const d = diaries.get(dir);
+    const ext = (base.match(/\.(\w+)$/) || [])[1]?.toLowerCase();
+    if (ext === "html" || ext === "htm") d.html = en;
+    else if (ZIP_IMG_MIME[ext]) d.images.set(base, en);
+  }
+  const list = [...diaries.values()].filter(d => d.html);
+  if (!list.length) {
+    toast("対応する日記が見つかりませんでした（シンプル日記の「日記データの出力」zipに対応しています）");
+    return;
+  }
+  if (!confirm(`zipから日記 ${list.length} 件が見つかりました。今の日記に追加します。よろしいですか？`)) return;
+
+  let added = 0, skipped = 0, photoCount = 0, failed = 0, done = 0;
+  const usedIds = new Set(state.data.entries.map(e => e.id));
+  for (const d of list) {
+    done++;
+    try {
+      const htmlText = await (await zipExtract(buf, d.html)).text();
+      const { title, body, imgSrcs } = parseDiaryHtml(htmlText);
+      if (!title && !body && !d.images.size) { skipped++; continue; }
+      const date = `${d.m[1]}-${pad(Number(d.m[2]))}-${pad(Number(d.m[3]))}`;
+      const time = `${pad(Number(d.m[4]))}:${d.m[5]}`;
+      if (state.data.entries.some(e => e.date === date && e.title === title && e.body === body)) { skipped++; continue; }
+      // 本文が参照する画像を優先し、参照が拾えなければフォルダ内の画像を全部添付する
+      const named = imgSrcs.filter(n => d.images.has(n));
+      const picks = named.length ? [...new Set(named)] : [...d.images.keys()].sort();
+      const images = [];
+      for (const n of picks) {
+        try {
+          const ext = n.match(/\.(\w+)$/)[1].toLowerCase();
+          const blob = await zipExtract(buf, d.images.get(n), ZIP_IMG_MIME[ext]);
+          const { blob: jpeg, w, h } = await processImageFile(blob);
+          const id = newImageId();
+          await imagePut(id, { blob: jpeg, w, h, type: "image/jpeg" });
+          images.push({ id, w, h });
+          photoCount++;
+        } catch (e) { console.error("zip image skip:", n, e); }
+      }
+      // 同じ日時が既にあっても衝突しないよう、ミリ秒部で採番する（テキストインポートと同じ流儀）
+      let ms = added % 1000, id;
+      do { id = `${date}T${time}:00.${String(ms).padStart(3, "0")}`; ms = (ms + 1) % 1000; }
+      while (usedIds.has(id));
+      usedIds.add(id);
+      state.data.entries.push({
+        id, date,
+        weekday: WEEKDAYS[new Date(date + "T12:00:00").getDay()],
+        time, title, body, mood: null, score: null,
+        weather: null, location: state.data.settings.location.name, ai: null,
+        images, song: null
+      });
+      added++;
+      if (done % 10 === 0) toast(`取り込み中… ${done}/${list.length}件`);
+    } catch (e) { console.error(e); failed++; }
+  }
+  saveData();
+  state.view = "list";
+  render();
+  toast(`${added}件追加しました${photoCount ? `（写真${photoCount}枚）` : ""}${skipped ? `・重複などスキップ${skipped}件` : ""}${failed ? `・失敗${failed}件` : ""}`);
 }
 
 // ===== 日時ユーティリティ =====
@@ -1753,7 +1917,7 @@ function renderHelp() {
       ${sec("save", "バックアップ（大事）", `
         <p>データはこの端末のブラウザ内にあります。<b>iPhoneならホーム画面に追加</b>して使うと、オフラインでも開けてデータも守られやすくなります。</p>
         <p>設定 → バックアップから: <b>「共有してバックアップ」→「ファイルに保存」でiCloud Drive</b>に保存できます。JSON/Markdownのダウンロードも可能。</p>
-        <p>バックアップしないまま7日たつと、リストにお知らせが出ます。復元は「JSONからインポート」、他の日記アプリからの引っ越しは「テキスト/Markdownから追加インポート」で。</p>`)}
+        <p>バックアップしないまま7日たつと、リストにお知らせが出ます。復元は「JSONからインポート」、他の日記アプリからの引っ越しは「テキスト/Markdownから追加インポート」か「zipから追加インポート」（シンプル日記のHTML出力zip・写真ごと取り込み）で。</p>`)}
       ${sec("flame", "続ける仕組み（連続記録）", `
         <p>今日まだ書いていない日は、リストの一番上に<b>「連続◯日で継続中。今日書けば◯日に伸びます」</b>とだけ出ます。書けば消えるので、通知でせかされる感じはありません。</p>
         <p>3日・5日・7日…と続けると保存時に<b>${icon("flame", 13)}お祝い</b>が出ます。<b>グラフ</b>タブに現在の連続日数と最長記録も出ます。<b>1日空いても記録はゼロに戻るだけで、日記は消えません</b>。気楽にまた始めればOKです。</p>
@@ -2338,7 +2502,8 @@ function renderSettings() {
         <button class="ghost" data-action="export-md">Markdownでエクスポート</button>
         <button class="ghost" data-action="import">JSONからインポート（全置き換え）</button>
         <button class="ghost" data-action="import-text">テキスト/Markdownから追加インポート（他アプリの移行）</button>
-        <div class="label">iPhoneでは「共有してバックアップ」→「ファイルに保存」でiCloud Driveに保存できます。他アプリからの移行は「## 2026-07-08 タイトル」のような日付見出しのテキストに対応</div>
+        <button class="ghost" data-action="import-zip">zipから追加インポート（シンプル日記の引っ越し）</button>
+        <div class="label">iPhoneでは「共有してバックアップ」→「ファイルに保存」でiCloud Driveに保存できます。他アプリからの移行は「## 2026-07-08 タイトル」のような日付見出しのテキスト、またはシンプル日記の「日記データの出力」zip（HTML形式・写真も取り込み）に対応</div>
       </div>
     </div>
     <div class="settings-row">
@@ -3063,6 +3228,7 @@ document.addEventListener("click", e => {
   else if (a === "export-md") { exportMarkdown(); }
   else if (a === "import") { document.getElementById("importFile").click(); }
   else if (a === "import-text") { document.getElementById("importTextFile").click(); }
+  else if (a === "import-zip") { document.getElementById("importZipFile").click(); }
 });
 
 // write画面の入力値（title/body）を消さずに気分・点数ボタンだけ更新する
@@ -3125,6 +3291,12 @@ document.getElementById("importTextFile").addEventListener("change", e => {
     reader.onload = () => importTextEntries(String(reader.result));
     reader.readAsText(file);
   }
+  e.target.value = "";
+});
+
+document.getElementById("importZipFile").addEventListener("change", e => {
+  const file = e.target.files[0];
+  if (file) importZip(file);
   e.target.value = "";
 });
 
