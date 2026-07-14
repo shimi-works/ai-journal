@@ -333,6 +333,41 @@ button.ghost:hover { background: var(--surface-2); }
   opacity: 0; pointer-events: none; transition: opacity 200ms ease, transform 200ms ease; z-index: 20;
 }
 #toast.show { opacity: 1; transform: translate(-50%, 0); }
+
+/* ===== 画像・テーマソング ===== */
+.img-strip { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
+.img-strip[hidden] { display: none; }
+.img-thumb { position: relative; width: 80px; height: 80px; border-radius: 10px; overflow: hidden; border: 1px solid var(--border); background: var(--surface); }
+.img-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.img-del {
+  position: absolute; top: 2px; right: 2px; width: 22px; height: 22px; border-radius: 50%;
+  border: none; background: rgba(13,15,19,0.72); color: #fff; font-size: 15px; line-height: 22px;
+  cursor: pointer; padding: 0; text-align: center;
+}
+.img-del:hover { background: rgba(13,15,19,0.92); }
+.song-fields > * + * { margin-top: 8px; }
+.song-fields input {
+  width: 100%; padding: 12px; font-size: 15px; background: var(--surface);
+  border: 1px solid var(--border); border-radius: var(--radius); color: var(--text); font-family: inherit;
+}
+.song-fields input::placeholder { color: #565c68; }
+.song-line {
+  display: inline-flex; align-items: center; gap: 6px; font-size: 14.5px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 999px; padding: 6px 14px;
+  color: var(--text); text-decoration: none;
+}
+.song-line .icn { color: var(--accent); }
+a.song-line:hover { border-color: var(--accent); }
+.entry-song { margin-bottom: 16px; }
+.entry-images { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 8px; margin-top: 20px; }
+.entry-img { padding: 0; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; background: var(--surface); cursor: zoom-in; aspect-ratio: 1; }
+.entry-img img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.lightbox {
+  position: fixed; inset: 0; z-index: 50; background: rgba(0,0,0,0.9);
+  display: flex; align-items: center; justify-content: center; padding: 16px; cursor: zoom-out;
+}
+.lightbox[hidden] { display: none; }
+.lightbox img { max-width: 100%; max-height: 100%; border-radius: 8px; }
 </style>
 </head>
 <body>
@@ -349,12 +384,19 @@ button.ghost:hover { background: var(--surface-2); }
 <div id="toast" role="status"></div>
 <input type="file" id="importFile" accept=".json,application/json" hidden>
 <input type="file" id="importTextFile" accept=".md,.txt,text/plain,text/markdown" hidden>
+<input type="file" id="imageFile" accept="image/*" multiple hidden>
+<div id="lightbox" class="lightbox" hidden><img id="lightboxImg" alt="写真"></div>
 <script>
 "use strict";
 
 // ===== 定数 =====
 const STORAGE_KEY = "ai-journal";
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
+// 画像は縮小・JPEG圧縮してからIndexedDBへ保存する（localStorageは容量が小さいので本文だけ置く）
+const IMAGE_MAX_DIM = 1280;        // 長辺の上限px（これを超える写真は自動で縮小）
+const IMAGE_JPEG_QUALITY = 0.82;
+const MEDIA_DB = "ai-journal-media";
+const MEDIA_STORE = "images";
 // テーマカラー（UIアクセント。グラフ配色は検証済みの固定値を使うので変えない）
 const ACCENTS = {
   blue: "#7aa2f7", purple: "#bb9af7", green: "#9ece6a",
@@ -423,7 +465,8 @@ const state = {
   view: "list",        // list | calendar | review | graph | settings | write | entry | search | lock
   entryId: null,
   editingId: null,     // 既存日記の編集中はそのID（新規はnull）
-  draft: { score: null, mood: null, date: null, title: "", body: "" },  // write画面の下書き（dateで過去日にさかのぼれる）
+  draft: { score: null, mood: null, date: null, title: "", body: "", images: [], song: null },  // write画面の下書き（dateで過去日にさかのぼれる）
+  draftImagesOrig: [], // 編集開始時点の画像ID。保存/破棄でIndexedDBの孤児画像を掃除するのに使う
   reviewKind: "week",  // week | month | year
   graphRange: 30,      // 日数。0=全期間
   generating: null,    // 生成中のdigestキー（"week:2026-07-06" 等）
@@ -480,6 +523,14 @@ function migrateData(d) {
     if (!d.settings.theme) d.settings.theme = { accent: "blue", font: "gothic", fontSize: "m" };
     d.v = 3;
   }
+  if (d.v === 3) {
+    // 画像添付・テーマソングを追加。既存日記は空で補完する
+    for (const e of d.entries) {
+      if (!Array.isArray(e.images)) e.images = [];
+      if (!("song" in e)) e.song = null;
+    }
+    d.v = 4;
+  }
   // バックアップ記録（後付けフィールド。バージョンを上げず既定値で吸収）
   if (!("lastBackupAt" in d.settings)) d.settings.lastBackupAt = null;
   if (!("lastBackupCount" in d.settings)) d.settings.lastBackupCount = 0;
@@ -491,6 +542,11 @@ function migrateData(d) {
     d.settings.push = { serverUrl: "", vapidPublicKey: "", enabled: false, endpoint: null };
   }
   if (!d.usedTopics || typeof d.usedTopics !== "object") d.usedTopics = {};
+  // 後付けフィールドの保険（v4以降のデータで欠けていても吸収する）
+  for (const e of d.entries) {
+    if (!Array.isArray(e.images)) e.images = [];
+    if (!("song" in e)) e.song = null;
+  }
   return d;
 }
 
@@ -570,6 +626,158 @@ function downloadFile(filename, text, mime) {
   URL.revokeObjectURL(a.href);
 }
 
+// ===== 画像ストレージ（IndexedDB） =====
+// localStorageは数MBしか入らず写真ですぐ溢れるので、画像Blobはこちらに置き、
+// 日記(entry)側には画像IDの参照だけを持たせる。バックアップ時はbase64で書き出す。
+let mediaDbPromise = null;
+function openMediaDB() {
+  if (mediaDbPromise) return mediaDbPromise;
+  mediaDbPromise = new Promise((resolve, reject) => {
+    let req;
+    try { req = indexedDB.open(MEDIA_DB, 1); }
+    catch (e) { reject(e); return; }
+    req.onupgradeneeded = () => {
+      if (!req.result.objectStoreNames.contains(MEDIA_STORE)) req.result.createObjectStore(MEDIA_STORE);
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+  return mediaDbPromise;
+}
+function idbReq(req) {
+  return new Promise((resolve, reject) => {
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+async function mediaStore(mode) {
+  const db = await openMediaDB();
+  return db.transaction(MEDIA_STORE, mode).objectStore(MEDIA_STORE);
+}
+async function imagePut(id, rec) { return idbReq((await mediaStore("readwrite")).put(rec, id)); }
+async function imageGet(id)      { return idbReq((await mediaStore("readonly")).get(id)); }
+async function imageDelete(id)   { return idbReq((await mediaStore("readwrite")).delete(id)); }
+async function imageKeys()       { return idbReq((await mediaStore("readonly")).getAllKeys()); }
+
+// 表示用のobjectURLはid単位でキャッシュ（再描画のたびに作り直さない）
+const imgUrlCache = new Map();
+async function imageUrl(id) {
+  if (imgUrlCache.has(id)) return imgUrlCache.get(id);
+  try {
+    const rec = await imageGet(id);
+    if (!rec || !rec.blob) return null;
+    const url = URL.createObjectURL(rec.blob);
+    imgUrlCache.set(id, url);
+    return url;
+  } catch (e) { console.error(e); return null; }
+}
+
+let imgCounter = 0;
+function newImageId() { return `img_${Date.now().toString(36)}_${(imgCounter++).toString(36)}`; }
+
+// 画像を長辺IMAGE_MAX_DIMに縮小し、JPEGに再エンコードして容量を抑える
+function processImageFile(file) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      const scale = Math.min(1, IMAGE_MAX_DIM / Math.max(img.width, img.height));
+      const w = Math.max(1, Math.round(img.width * scale));
+      const h = Math.max(1, Math.round(img.height * scale));
+      const canvas = document.createElement("canvas");
+      canvas.width = w; canvas.height = h;
+      const ctx = canvas.getContext("2d");
+      ctx.fillStyle = "#ffffff";   // 透過PNGを平らな白背景に（JPEGは透明を持てない）
+      ctx.fillRect(0, 0, w, h);
+      ctx.drawImage(img, 0, 0, w, h);
+      canvas.toBlob(blob => {
+        blob ? resolve({ blob, w, h, type: "image/jpeg" }) : reject(new Error("画像の変換に失敗しました"));
+      }, "image/jpeg", IMAGE_JPEG_QUALITY);
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("画像を読み込めませんでした")); };
+    img.src = url;
+  });
+}
+
+// 選んだ画像を縮小・保存して下書きに足す
+async function addDraftImages(files) {
+  const list = [...files].filter(f => f.type.startsWith("image/"));
+  if (!list.length) { toast("画像ファイルを選んでください"); return; }
+  toast(`画像を処理中…（${list.length}枚）`);
+  let ok = 0;
+  for (const file of list) {
+    try {
+      const { blob, w, h, type } = await processImageFile(file);
+      const id = newImageId();
+      await imagePut(id, { blob, w, h, type });
+      state.draft.images.push({ id, w, h });
+      ok++;
+    } catch (e) { console.error(e); toast(e.message || "画像を追加できませんでした"); }
+  }
+  await renderDraftImages();
+  if (ok) toast(`写真を${ok}枚追加しました`);
+}
+
+// 保存(commit=true)なら「消された元画像」を、破棄(commit=false)なら「今回足した画像」をIDBから削除
+function cleanupDraftImages(commit) {
+  const orig = new Set(state.draftImagesOrig || []);
+  const draftIds = new Set(state.draft.images.map(im => im.id));
+  if (commit) {
+    for (const id of orig) if (!draftIds.has(id)) imageDelete(id).catch(() => {});
+  } else {
+    for (const im of state.draft.images) if (!orig.has(im.id)) imageDelete(im.id).catch(() => {});
+  }
+  state.draftImagesOrig = [];
+}
+
+// ===== バックアップ用のBlob⇄dataURL =====
+function blobToDataUrl(blob) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(r.result);
+    r.onerror = () => reject(r.error);
+    r.readAsDataURL(blob);
+  });
+}
+function dataUrlToBlob(dataUrl) {
+  const [head, b64] = String(dataUrl).split(",");
+  const mime = (head.match(/:(.*?);/) || [])[1] || "image/jpeg";
+  const bin = atob(b64);
+  const arr = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+  return new Blob([arr], { type: mime });
+}
+
+// エクスポート用データ: 通常のデータ + 参照中の画像をbase64で同梱（1ファイルで完全復元できる）
+async function buildBackupPayload() {
+  const ids = new Set();
+  for (const e of state.data.entries) for (const im of (e.images || [])) ids.add(im.id);
+  const media = {};
+  for (const id of ids) {
+    try {
+      const rec = await imageGet(id);
+      if (rec && rec.blob) media[id] = { data: await blobToDataUrl(rec.blob), w: rec.w, h: rec.h, type: rec.type };
+    } catch (e) { console.error("backup image skip:", id, e); }
+  }
+  return { ...state.data, media };
+}
+
+// インポート時に画像を復元。インポートは全置き換えなので既存の画像はいったん全消しする
+async function restoreMedia(media) {
+  try {
+    const keys = await imageKeys();
+    for (const k of keys) await imageDelete(k);
+    imgUrlCache.forEach(url => URL.revokeObjectURL(url));
+    imgUrlCache.clear();
+    if (!media || typeof media !== "object") return;
+    for (const [id, m] of Object.entries(media)) {
+      if (!m || !m.data) continue;
+      await imagePut(id, { blob: dataUrlToBlob(m.data), w: m.w, h: m.h, type: m.type || "image/jpeg" });
+    }
+  } catch (e) { console.error(e); toast("画像の復元中に問題が発生しました"); }
+}
+
 // バックアップした事実を記録する（リマインダーと「未保存N件」表示の基準）
 function markBackedUp() {
   state.data.settings.lastBackupAt = `${todayStr()}T${fmtTime(new Date())}`;
@@ -578,11 +786,12 @@ function markBackedUp() {
   saveData();
 }
 
-function exportJson() {
+async function exportJson() {
+  const payload = await buildBackupPayload();
   downloadFile(`ai-journal-${todayStr()}.json`,
-    JSON.stringify(state.data, null, 2), "application/json");
+    JSON.stringify(payload, null, 2), "application/json");
   markBackedUp();
-  toast("JSONをエクスポートしました");
+  toast("JSONをエクスポートしました（写真も含む）");
 }
 
 function exportMarkdown() {
@@ -593,10 +802,12 @@ function exportMarkdown() {
     const meta = [];
     if (e.mood) meta.push(moodOf(e.mood).emoji + " " + moodOf(e.mood).name);
     if (e.score != null) meta.push(`${e.score}点`);
+    if (e.song && e.song.title) meta.push(`🎵 ${e.song.title}${e.song.artist ? " / " + e.song.artist : ""}`);
     if (e.weather) meta.push(weatherLine(e.weather));
     if (e.location) meta.push(`@${e.location}`);
     if (meta.length) { lines.push(`> ${meta.join("　")}`); lines.push(""); }
     lines.push(e.body);
+    if (e.images && e.images.length) { lines.push(""); lines.push(`（写真${e.images.length}枚：JSONバックアップに保存されています）`); }
     lines.push("");
   }
   downloadFile(`ai-journal-${todayStr()}.md`, lines.join("\n"), "text/markdown");
@@ -605,7 +816,7 @@ function exportMarkdown() {
 
 function importJson(file) {
   const reader = new FileReader();
-  reader.onload = () => {
+  reader.onload = async () => {
     let parsed;
     try {
       parsed = JSON.parse(reader.result);
@@ -620,12 +831,16 @@ function importJson(file) {
     }
     const cur = state.data.entries.length;
     if (!confirm(`現在の日記 ${cur} 件を、インポートする ${parsed.entries.length} 件で置き換えます。よろしいですか？`)) return;
+    // 画像はlocalStorageに入れず、IndexedDBへ復元する（mediaは本体データから外す）
+    const media = parsed.media && typeof parsed.media === "object" ? parsed.media : null;
+    delete parsed.media;
     state.data = migrateData(parsed);
     saveData();
+    await restoreMedia(media);
     applyTheme();
     state.view = "list";
     render();
-    toast("インポートしました");
+    toast(media ? "インポートしました（写真も復元）" : "インポートしました");
   };
   reader.readAsText(file);
 }
@@ -693,7 +908,8 @@ function importTextEntries(text) {
       weekday: WEEKDAYS[new Date(f.date + "T12:00:00").getDay()],
       time: f.time,
       title: f.title, body: f.body, mood: f.mood, score: f.score,
-      weather: null, location: state.data.settings.location.name, ai: null
+      weather: null, location: state.data.settings.location.name, ai: null,
+      images: [], song: null
     });
     added++;
   }
@@ -1119,7 +1335,7 @@ function allTopics() {
   return out;
 }
 
-function saveEntry(title, body, mood, score, date) {
+function saveEntry(title, body, mood, score, date, images, song) {
   const now = new Date();
   const entry = {
     // 日付は指定日（さかのぼり可）、IDは日付+現在時刻ミリ秒で衝突を防ぐ
@@ -1130,7 +1346,9 @@ function saveEntry(title, body, mood, score, date) {
     title, body, mood, score,
     weather: null,
     location: state.data.settings.location.name,
-    ai: null
+    ai: null,
+    images: images || [],
+    song: song || null
   };
   state.data.entries.push(entry);
   saveData();
@@ -1179,7 +1397,9 @@ const ICON_PATHS = {
   check: '<polyline points="4.5 12.5 9.8 18 19.5 6.5"/>',
   share: '<line x1="12" y1="4" x2="12" y2="15"/><polyline points="8 8 12 4 16 8"/><path d="M6 12.5V18a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2v-5.5"/>',
   phone: '<rect x="7" y="3" width="10" height="18" rx="2.2"/><line x1="10.6" y1="18" x2="13.4" y2="18"/>',
-  desktop: '<rect x="3" y="5" width="18" height="11" rx="1.6"/><line x1="9" y1="20" x2="15" y2="20"/><line x1="12" y1="16" x2="12" y2="20"/>'
+  desktop: '<rect x="3" y="5" width="18" height="11" rx="1.6"/><line x1="9" y1="20" x2="15" y2="20"/><line x1="12" y1="16" x2="12" y2="20"/>',
+  image: '<rect x="3.5" y="5" width="17" height="14" rx="2"/><circle cx="8.5" cy="9.7" r="1.6"/><path d="M4 17l4.5-4.2 3.2 2.8 3-2.6L20 17"/>',
+  music: '<path d="M9 17V5.5l10-2V15"/><circle cx="6.4" cy="17.2" r="2.4"/><circle cx="16.4" cy="15.2" r="2.4"/>'
 };
 function icon(name, size = 18, cls = "") {
   return `<svg class="icn ${cls}" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICON_PATHS[name]}</svg>`;
@@ -1250,7 +1470,9 @@ function render() {
   if (state.view === "write") {
     const body = document.getElementById("body");
     if (body) body.focus();
+    renderDraftImages();
   }
+  if (state.view === "entry") hydrateImages(app);
   if (state.view === "search") {
     const box = document.getElementById("searchBox");
     if (box) { box.focus(); box.setSelectionRange(box.value.length, box.value.length); }
@@ -1273,6 +1495,8 @@ function entryCardHTML(e, opts = {}) {
   const meta = [];   // 各要素はエスケープ済みHTML
   if (opts.withMonth) meta.push(esc(displayDate(e.date)));
   if (e.score != null) meta.push(`${e.score}点`);
+  if (e.images && e.images.length) meta.push(`${icon("image", 14)} ${e.images.length}`);
+  if (e.song && e.song.title) meta.push(`${icon("music", 14)} ${esc(e.song.title)}`);
   if (e.weather) meta.push(`${weatherSVG(e.weather.code, 15)} ${e.weather.temp}°C`);
   if (e.ai && e.ai.tags.length) meta.push(esc(e.ai.tags.slice(0, 3).join(" ")));
   return `<button class="entry-item" data-action="open-entry" data-id="${esc(e.id)}">
@@ -1331,9 +1555,9 @@ function backupBannerHTML() {
 // 新機能のお知らせ（アップデート告知）。既存ユーザーが次に開いたとき最上部に出る。
 // 新しいお知らせを出すときは id を変える（過去に閉じた人にも再表示される）。
 const CURRENT_NOTICE = {
-  id: "notify-2026-07",
-  title: "新機能：毎日のリマインダー通知",
-  body: "書き忘れ防止に、決まった時刻へ「日記を書こう」と通知できるようになりました。設定はかんたん、押すだけです。"
+  id: "notify-2026-08-media",
+  title: "新機能：写真とテーマソング",
+  body: "日記に写真を添付できるようになりました。さらに「その日のテーマソング」（曲名・アーティスト・リンク）も残せます。書く画面から使えます。写真はバックアップにも含まれます。"
 };
 function noticeBannerHTML() {
   if (state.data.settings.lastSeenNotice === CURRENT_NOTICE.id) return "";
@@ -1341,8 +1565,7 @@ function noticeBannerHTML() {
     <div class="notice-title">${icon("bell", 16)} ${esc(CURRENT_NOTICE.title)}</div>
     <div class="notice-body">${esc(CURRENT_NOTICE.body)}</div>
     <div class="notice-actions">
-      <button class="primary" data-action="open-push-settings">通知を設定する</button>
-      <button class="ghost" data-action="dismiss-notice">あとで</button>
+      <button class="ghost" data-action="dismiss-notice">確認しました</button>
     </div>
   </div>`;
 }
@@ -1501,6 +1724,10 @@ function renderHelp() {
         点数と気分を入れておくと、グラフやカレンダーが育ちます。</p>
         <p><b>過去の日の日記</b>も書けます: 上の日付をタップするとカレンダーが出るので、書きたい日を選ぶだけ（‹ ›で1日ずつも動けます）。</p>
         <p>キーボードなら <span class="key">Ctrl+Enter</span> で保存、<span class="key">Esc</span> で戻れます。</p>`)}
+      ${sec("image", "写真とテーマソング", `
+        <p><b>${icon("image", 13)} 写真を追加</b>から、その日の写真を何枚でも添付できます（自動で縮小されるので容量にやさしい）。タップで拡大、書く画面では × で外せます。</p>
+        <p><b>${icon("music", 13)} テーマソング</b>: 曲名・アーティストと、あれば <b>SpotifyやYouTubeのURL</b> を貼っておくと、日記からタップして曲を開けます。オフラインでも記録自体は残ります。</p>
+        <p>写真は端末内（IndexedDB）に保存され、<b>JSONバックアップにも一緒に入る</b>ので、機種変更や復元でも写真ごと戻せます。※Markdownエクスポートは文章のみで、写真は含まれません。</p>`)}
       ${sec("list", "読む・編集する・AIをやり直す", `
         <p>リストのカードをタップすると日記が開きます。右上の <b>${icon("pen", 13)}</b> で編集、<b>${icon("trash", 13)}</b> で削除。</p>
         <p>日記の下にAIの要約とタグが表示されます。付いていないときは「${icon("sparkles", 13)} AIで要約・タグ付け」、
@@ -1568,6 +1795,7 @@ function renderWrite() {
   const moodBtns = MOODS.map(m =>
     `<button data-action="pick-mood" data-mood="${m.value}" class="${state.draft.mood === m.value ? "active" : ""}">${moodSVG(m.value, 30)}<span class="mood-name">${m.name}</span></button>`).join("");
   const isToday = state.draft.date === todayStr();
+  const song = state.draft.song || {};
   return `
     <div class="topbar" style="position:relative">
       <button class="icon-btn" data-action="back" title="戻る" aria-label="戻る">←</button>
@@ -1587,6 +1815,19 @@ function renderWrite() {
         <div class="mood-row">${moodBtns}</div>
       </div>
       ${state.data.settings.googleClientId ? `<button class="ghost" data-action="insert-events">${icon("calendar", 14)} ${isToday ? "今日" : "この日"}の予定を挿入</button>` : ""}
+      <div>
+        <div class="ask-label">写真（任意）</div>
+        <div id="draftImages" class="img-strip" hidden></div>
+        <button class="ghost" data-action="add-image">${icon("image", 14)} 写真を追加</button>
+      </div>
+      <div>
+        <div class="ask-label">${isToday ? "今日" : "この日"}のテーマソング（任意）</div>
+        <div class="song-fields">
+          <input type="text" id="songTitle" placeholder="曲名" autocomplete="off" value="${esc(song.title || "")}">
+          <input type="text" id="songArtist" placeholder="アーティスト（任意）" autocomplete="off" value="${esc(song.artist || "")}">
+          <input type="url" id="songUrl" placeholder="URL（Spotify / YouTube など・任意）" autocomplete="off" value="${esc(song.url || "")}">
+        </div>
+      </div>
       <div>
         <input type="text" id="title" placeholder="タイトル" autocomplete="off" value="${esc(state.draft.title || "")}">
         <textarea id="body" placeholder="${isToday ? "今日" : "この日"}あったことを、そのまま書けばOK。">${esc(state.draft.body || "")}</textarea>
@@ -1664,6 +1905,48 @@ function entryAiHTML(e) {
   </div></div>`;
 }
 
+// テーマソングの表示（URLがあればタップで外部アプリを開くリンクにする）
+function songLineHTML(song) {
+  if (!song || (!song.title && !song.url)) return "";
+  const label = song.title
+    ? esc(song.title) + (song.artist ? ` — ${esc(song.artist)}` : "")
+    : "テーマソング";
+  const inner = `${icon("music", 14)} ${label}`;
+  if (song.url && /^https?:\/\//i.test(song.url)) {
+    return `<a class="song-line" href="${esc(song.url)}" target="_blank" rel="noopener noreferrer">${inner}</a>`;
+  }
+  return `<span class="song-line">${inner}</span>`;
+}
+
+// 日記の画像グリッド（src はIDB読み出し後に hydrateImages で流し込む）
+function entryImagesHTML(images) {
+  const items = images.map((im, i) =>
+    `<button class="entry-img" data-action="view-image" data-id="${esc(im.id)}" aria-label="写真${i + 1}を拡大">
+      <img data-img-id="${esc(im.id)}" alt="写真${i + 1}"></button>`).join("");
+  return `<div class="entry-images">${items}</div>`;
+}
+
+// data-img-id を持つ<img>にIDBのobjectURLを流し込む（未設定のものだけ）
+async function hydrateImages(container) {
+  if (!container) return;
+  for (const el of container.querySelectorAll("img[data-img-id]:not([src])")) {
+    const url = await imageUrl(el.dataset.imgId);
+    if (url) el.src = url; else el.closest(".entry-img, .img-thumb")?.remove();
+  }
+}
+
+// write画面のサムネイル列を下書きの内容から作り直す
+async function renderDraftImages() {
+  const strip = document.getElementById("draftImages");
+  if (!strip) return;
+  if (!state.draft.images.length) { strip.innerHTML = ""; strip.hidden = true; return; }
+  strip.hidden = false;
+  strip.innerHTML = state.draft.images.map((im, i) =>
+    `<div class="img-thumb"><img data-img-id="${esc(im.id)}" alt="写真${i + 1}">
+      <button class="img-del" data-action="remove-image" data-id="${esc(im.id)}" title="削除" aria-label="写真を削除">×</button></div>`).join("");
+  await hydrateImages(strip);
+}
+
 function renderEntry() {
   const e = findEntry(state.entryId);
   if (!e) { state.view = "list"; return renderList(); }
@@ -1687,7 +1970,9 @@ function renderEntry() {
       ${e.title ? `<h2>${esc(e.title)}</h2>` : ""}
       ${badges.length ? `<div class="badges">${badges.join("")}</div>` : ""}
       <div class="weather-line">${weather}</div>
+      ${e.song && (e.song.title || e.song.url) ? `<div class="entry-song">${songLineHTML(e.song)}</div>` : ""}
       <div class="body">${esc(e.body)}</div>
+      ${e.images && e.images.length ? entryImagesHTML(e.images) : ""}
       ${entryAiHTML(e)}
     </div>`;
 }
@@ -2060,7 +2345,7 @@ function renderSettings() {
 
 // Web Share APIでバックアップJSONを共有（iOSならファイルに保存→iCloud Drive）
 async function shareBackup() {
-  const json = JSON.stringify(state.data, null, 2);
+  const json = JSON.stringify(await buildBackupPayload(), null, 2);
   const file = new File([json], `ai-journal-${todayStr()}.json`, { type: "application/json" });
   if (navigator.canShare && navigator.canShare({ files: [file] })) {
     try {
@@ -2293,9 +2578,14 @@ function leaveWriteSafely() {
   const title = document.getElementById("title");
   const orig = state.editingId ? (findEntry(state.editingId) || {}) : {};
   // タイトルだけ書いた状態も「書きかけ」として扱う
+  const imagesChanged = JSON.stringify(state.draft.images.map(im => im.id))
+    !== JSON.stringify(state.draftImagesOrig || []);
+  const songChanged = JSON.stringify(readDraftSong()) !== JSON.stringify(orig.song || null);
   const dirty = (body && body.value.trim() && body.value.trim() !== (orig.body || "").trim())
-    || (title && title.value.trim() && title.value.trim() !== (orig.title || "").trim());
+    || (title && title.value.trim() && title.value.trim() !== (orig.title || "").trim())
+    || imagesChanged || songChanged;
   if (dirty && !confirm("書きかけの内容を破棄しますか？")) return;
+  cleanupDraftImages(false);   // 今回追加して未保存の画像はIDBから消す
   if (state.editingId) {
     // 編集をやめたら元のentry表示に戻る
     const id = state.editingId;
@@ -2306,10 +2596,19 @@ function leaveWriteSafely() {
   }
 }
 
+// テーマソング欄を読み取る。全部空ならnull（記録なし）
+function readDraftSong() {
+  const val = id => (document.getElementById(id)?.value || "").trim();
+  const title = val("songTitle"), artist = val("songArtist"), url = val("songUrl");
+  if (!title && !artist && !url) return null;
+  return { title, artist, url };
+}
+
 function handleSave() {
   const title = document.getElementById("title").value.trim();
   const body = document.getElementById("body").value.trim();
   if (!body) { toast("本文が空です"); return; }
+  const song = readDraftSong();
   if (state.editingId) {
     const e = findEntry(state.editingId);
     state.editingId = null;
@@ -2317,6 +2616,8 @@ function handleSave() {
       const dateChanged = e.date !== state.draft.date;
       const contentChanged = e.title !== title || e.body !== body;
       e.title = title; e.body = body; e.mood = state.draft.mood; e.score = state.draft.score;
+      e.images = [...state.draft.images]; e.song = song;
+      cleanupDraftImages(true);
       if (dateChanged) {
         e.date = state.draft.date;
         e.weekday = WEEKDAYS[new Date(e.date + "T12:00:00").getDay()];
@@ -2343,7 +2644,8 @@ function handleSave() {
     }
   }
   const savedDate = state.draft.date;
-  saveEntry(title, body, state.draft.mood, state.draft.score, savedDate);
+  saveEntry(title, body, state.draft.mood, state.draft.score, savedDate, [...state.draft.images], song);
+  cleanupDraftImages(true);
   backToList();
   // 今日の分を書いたら連続日数でお祝い（節目は強めに）。続けたくなる小さなご褒美
   const st = calcStreak();
@@ -2371,16 +2673,36 @@ document.addEventListener("click", e => {
   }
   else if (a === "go-write") {
     state.editingId = null;
-    state.draft = { score: null, mood: null, date: todayStr(), title: "", body: "" };
+    state.draft = { score: null, mood: null, date: todayStr(), title: "", body: "", images: [], song: null };
+    state.draftImagesOrig = [];
     state.view = "write"; render();
   }
   else if (a === "edit-entry") {
     const e2 = findEntry(state.entryId);
     if (e2) {
       state.editingId = e2.id;
-      state.draft = { score: e2.score, mood: e2.mood, date: e2.date, title: e2.title, body: e2.body };
+      state.draft = {
+        score: e2.score, mood: e2.mood, date: e2.date, title: e2.title, body: e2.body,
+        images: [...(e2.images || [])], song: e2.song ? { ...e2.song } : null
+      };
+      state.draftImagesOrig = (e2.images || []).map(im => im.id);
       state.view = "write"; render();
     }
+  }
+  else if (a === "add-image") { document.getElementById("imageFile").click(); }
+  else if (a === "remove-image") {
+    const id = el.dataset.id;
+    state.draft.images = state.draft.images.filter(im => im.id !== id);
+    // 元からある画像は保存/破棄時に整理する。今回追加した分だけ即削除して孤児を残さない
+    if (!(state.draftImagesOrig || []).includes(id)) imageDelete(id).catch(() => {});
+    renderDraftImages();
+  }
+  else if (a === "view-image") {
+    imageUrl(el.dataset.id).then(url => {
+      if (!url) return;
+      document.getElementById("lightboxImg").src = url;
+      document.getElementById("lightbox").hidden = false;
+    });
   }
   else if (a === "run-entry-ai") {
     const e2 = findEntry(state.entryId);
@@ -2389,6 +2711,7 @@ document.addEventListener("click", e => {
   else if (a === "delete-entry") {
     const e2 = findEntry(state.entryId);
     if (e2 && confirm(`${displayDate(e2.date)}の日記を削除しますか？`)) {
+      for (const im of (e2.images || [])) imageDelete(im.id).catch(() => {});   // 添付画像もIDBから消す
       state.data.entries = state.data.entries.filter(x => x.id !== e2.id);
       saveData();
       backToList();
@@ -2598,6 +2921,10 @@ document.addEventListener("keydown", e => {
     if (e.key === "Enter") { e.preventDefault(); tryUnlock(); }
     return;  // ロック中はEscでも抜けられない
   }
+  const lb = document.getElementById("lightbox");
+  if (e.key === "Escape" && lb && !lb.hidden) {   // 拡大表示中はまずそれを閉じる
+    lb.hidden = true; document.getElementById("lightboxImg").removeAttribute("src"); return;
+  }
   if (e.key === "Escape" && state.view !== "list") {
     state.view === "write" ? leaveWriteSafely() : backToList();
   } else if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && state.view === "write") {
@@ -2620,6 +2947,18 @@ document.getElementById("importTextFile").addEventListener("change", e => {
     reader.readAsText(file);
   }
   e.target.value = "";
+});
+
+document.getElementById("imageFile").addEventListener("change", e => {
+  if (e.target.files && e.target.files.length) addDraftImages(e.target.files);
+  e.target.value = "";
+});
+
+// ライトボックス（拡大表示）はどこをタップしても閉じる
+document.getElementById("lightbox").addEventListener("click", () => {
+  const lb = document.getElementById("lightbox");
+  lb.hidden = true;
+  document.getElementById("lightboxImg").removeAttribute("src");
 });
 
 // ===== 起動 =====
