@@ -2340,6 +2340,22 @@ function renderSettings() {
         <button class="ghost" data-action="import-text">テキスト/Markdownから追加インポート（他アプリの移行）</button>
         <div class="label">iPhoneでは「共有してバックアップ」→「ファイルに保存」でiCloud Driveに保存できます。他アプリからの移行は「## 2026-07-08 タイトル」のような日付見出しのテキストに対応</div>
       </div>
+    </div>
+    <div class="settings-row">
+      <div class="label">端末間の同期（スマホ ⇄ PC）${syncCode() ? "・設定中" : ""}</div>
+      <div class="stack">
+        ${syncCode() ? `
+          <div><code style="user-select:all;font-size:13px">${esc(syncCode())}</code></div>
+          <button class="ghost" data-action="sync-copy">コードをコピー</button>
+          <button class="ghost" data-action="sync-now">今すぐ同期</button>
+          <button class="ghost" data-action="sync-off">同期を解除</button>
+        ` : `
+          <button class="ghost" data-action="sync-issue">同期コードを発行</button>
+          <button class="ghost" data-action="sync-enter">コードを入力</button>
+        `}
+        <div class="label">同期コードを発行し、他の端末で同じコードを入力すると、日記の本文・振り返り・テーマ設定が自動で同期されます。<b>写真はこの端末にのみ保存</b>（同期されません）。APIキー・プッシュ通知の設定も端末ごとです。コードは合鍵です。他人に教えないでください。</div>
+        <div class="label" id="syncStatus"></div>
+      </div>
     </div>`;
 }
 
@@ -2359,6 +2375,162 @@ async function shareBackup() {
     if (state.view === "settings" || state.view === "list") render();
     toast("この環境は共有に非対応のためダウンロードしました");
   }
+}
+
+// ===== 端末間同期（shimi-sync: 同期コード方式） =====
+// 保存のたびに日記データを Cloudflare KV へ送信（デバウンス＋間引き）。起動時とタブ復帰時に取得。
+// サーバーは楽観ロック(409)で「古い端末による黙った上書き」を拒否し、衝突したときだけ
+// 日記ID単位でマージする。通常は新しい方をそのまま採用する（＝日記の削除も他端末へ伝わる）。
+// 同期しないもの: APIキー・プッシュ通知の購読状態（端末ごと）・写真（IndexedDB保存のため）
+const SYNC_URL = "https://shimi-sync.shimi-works.workers.dev/v1/ai-journal/";
+const SYNC_LS_CODE = "ai-journal.sync.code", SYNC_LS_BASE = "ai-journal.sync.base", SYNC_LS_DIRTY = "ai-journal.sync.dirty";
+const SYNC_MIN_GAP = 20000;   // 天気・AI要約の後追い保存が連続するため、送信は間引く
+
+function syncCode() { return localStorage.getItem(SYNC_LS_CODE) || ""; }
+function syncBase() { const v = localStorage.getItem(SYNC_LS_BASE); return v == null ? null : Number(v); }
+function setSyncBase(t) { localStorage.setItem(SYNC_LS_BASE, String(t)); }
+function syncDirtyAt() { return Number(localStorage.getItem(SYNC_LS_DIRTY) || 0); }
+
+const saveDataCore = saveData;
+saveData = function () {
+  saveDataCore();
+  if (!syncCode()) return;
+  localStorage.setItem(SYNC_LS_DIRTY, String(Date.now()));
+  schedulePush();
+};
+
+// 送信用データ: 端末固有・秘密のフィールドを抜いたコピー
+function syncSanitize(data) {
+  const d = JSON.parse(JSON.stringify(data));
+  d.settings.apiKey = "";
+  d.settings.push = {
+    serverUrl: d.settings.push.serverUrl || "",
+    vapidPublicKey: d.settings.push.vapidPublicKey || "",
+    enabled: false, endpoint: null
+  };
+  return d;
+}
+// 受信データを反映（この端末のAPIキー・購読状態は維持する）
+function syncApply(remoteData) {
+  const local = state.data;
+  const d = migrateData(JSON.parse(JSON.stringify(remoteData)));
+  d.settings.apiKey = local.settings.apiKey;
+  d.settings.push.enabled = local.settings.push.enabled;
+  d.settings.push.endpoint = local.settings.push.endpoint;
+  if (!d.settings.push.serverUrl) d.settings.push.serverUrl = local.settings.push.serverUrl;
+  if (!d.settings.push.vapidPublicKey) d.settings.push.vapidPublicKey = local.settings.push.vapidPublicKey;
+  state.data = d;
+  saveDataCore();
+  applyTheme();
+  render();
+}
+function mergeSyncData(L, R, localNewer) {
+  const P = localNewer ? L : R, S = localNewer ? R : L;   // P=新しい側を優先
+  const out = JSON.parse(JSON.stringify(P));
+  // 日記はID単位の和集合。同じIDを両方で編集していたら新しい側を採用
+  const byId = new Map((S.entries || []).map(e => [e.id, e]));
+  (P.entries || []).forEach(e => byId.set(e.id, e));
+  out.entries = [...byId.values()].sort((a, b) => (a.id < b.id ? -1 : 1));
+  for (const kind of ["week", "month", "year"]) {
+    out.digests[kind] = { ...((S.digests || {})[kind] || {}), ...((P.digests || {})[kind] || {}) };
+  }
+  out.usedTopics = { ...(S.usedTopics || {}), ...(P.usedTopics || {}) };
+  out.v = Math.max(L.v || 0, R.v || 0);
+  return out;
+}
+let syncTimer = null, syncBusy = false, syncQueued = false, syncLastPush = 0;
+function schedulePush() {
+  clearTimeout(syncTimer);
+  const wait = Math.max(2500, SYNC_MIN_GAP - (Date.now() - syncLastPush));
+  syncTimer = setTimeout(doPush, wait);
+}
+function syncStatusMsg(t) { const el = document.getElementById("syncStatus"); if (el) el.textContent = t; }
+function syncTime() { const d = new Date(); return `${pad(d.getHours())}:${pad(d.getMinutes())}`; }
+async function adoptRemote(remote) {
+  const dirtyAt = syncDirtyAt();
+  if (!dirtyAt) {   // 未送信のローカル変更なし→リモートをそのまま採用（他端末での削除もここで反映される）
+    syncApply(remote.data || defaultData());
+    setSyncBase(remote.updatedAt);
+    syncStatusMsg("同期済み（" + syncTime() + "）");
+    return;
+  }
+  // 両方に変更がある（衝突）→ 日記ID単位でマージして再送。この場合のみ削除が復活しうる
+  const merged = mergeSyncData(syncSanitize(state.data), remote.data || defaultData(), dirtyAt > remote.updatedAt);
+  syncApply(merged);
+  setSyncBase(remote.updatedAt);
+  await doPush();
+}
+async function doPush() {
+  const code = syncCode(); if (!code) return;
+  if (syncBusy) { syncQueued = true; return; }
+  syncBusy = true; clearTimeout(syncTimer);
+  try {
+    const body = { baseUpdatedAt: syncBase(), updatedAt: Date.now(), data: syncSanitize(state.data) };
+    const res = await fetch(SYNC_URL + code, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    if (res.status === 409) { const remote = await res.json(); syncBusy = false; await adoptRemote(remote); return; }
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    syncLastPush = Date.now();
+    setSyncBase(body.updatedAt);
+    localStorage.removeItem(SYNC_LS_DIRTY);
+    syncStatusMsg("同期済み（" + syncTime() + "）");
+  } catch (e) {
+    syncStatusMsg("同期できませんでした（オフライン？）。次の保存時に自動で再送します。");
+  } finally {
+    syncBusy = false;
+    if (syncQueued) { syncQueued = false; schedulePush(); }
+  }
+}
+async function doPull() {
+  const code = syncCode(); if (!code) return;
+  try {
+    const res = await fetch(SYNC_URL + code);
+    if (res.status === 404) { await doPush(); return; }   // クラウド側が空→この端末の日記を初回アップロード
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const remote = await res.json();
+    if (remote.updatedAt !== syncBase()) await adoptRemote(remote);
+    else if (syncDirtyAt()) await doPush();
+    else syncStatusMsg("同期済み（" + syncTime() + "）");
+  } catch (e) {
+    syncStatusMsg("同期できませんでした（オフライン？）。接続後に自動で再試行します。");
+  }
+}
+function syncNewCode() {
+  const cs = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";   // 紛らわしい I/L/O/0/1 は使わない
+  const buf = new Uint32Array(20); crypto.getRandomValues(buf);
+  const s = [...buf].map(n => cs[n % cs.length]);
+  return [0, 1, 2, 3, 4].map(i => s.slice(i * 4, i * 4 + 4).join("")).join("-");
+}
+function syncIssue() {
+  localStorage.setItem(SYNC_LS_CODE, syncNewCode());
+  localStorage.removeItem(SYNC_LS_BASE);
+  if (state.view === "settings") render();
+  toast("同期コードを発行しました。他の端末で「コードを入力」してください");
+  doPush();
+}
+function syncEnter() {
+  const raw = prompt("他の端末で発行した同期コードを入力してください（例: ABCD-EFGH-JKMN-PQRS-TUVW）");
+  if (raw === null) return;
+  const code = raw.trim().toUpperCase();
+  if (!/^[A-HJ-NP-Z2-9]{4}(-[A-HJ-NP-Z2-9]{4}){4}$/.test(code)) { toast("コードの形式が正しくありません"); return; }
+  localStorage.setItem(SYNC_LS_CODE, code);
+  localStorage.removeItem(SYNC_LS_BASE);
+  localStorage.setItem(SYNC_LS_DIRTY, String(Date.now()));   // この端末の日記もマージで残す
+  if (state.view === "settings") render();
+  syncStatusMsg("同期しています…");
+  doPull();
+}
+function syncOff() {
+  if (!confirm("この端末の同期を解除しますか？（日記は消えません。クラウド上のデータも残ります）")) return;
+  localStorage.removeItem(SYNC_LS_CODE);
+  localStorage.removeItem(SYNC_LS_BASE);
+  localStorage.removeItem(SYNC_LS_DIRTY);
+  if (state.view === "settings") render();
+}
+function syncInit() {
+  if (syncCode()) doPull();
+  document.addEventListener("visibilitychange", () => {   // タブ復帰時に取得（端末の切替を想定）
+    if (document.visibilityState === "visible" && syncCode() && !syncBusy) doPull();
+  });
 }
 
 // ===== 通知リマインダー（.icsカレンダー予定でOSに毎日通知させる） =====
@@ -2880,6 +3052,13 @@ document.addEventListener("click", e => {
     saveData();
     toast(state.data.settings.apiKey ? "APIキーを保存しました" : "APIキーを削除しました");
   }
+  else if (a === "sync-issue") { syncIssue(); }
+  else if (a === "sync-enter") { syncEnter(); }
+  else if (a === "sync-now") { syncStatusMsg("同期しています…"); doPull(); }
+  else if (a === "sync-off") { syncOff(); }
+  else if (a === "sync-copy") {
+    navigator.clipboard?.writeText(syncCode()).then(() => toast("同期コードをコピーしました"), () => {});
+  }
   else if (a === "export-json") { exportJson(); }
   else if (a === "export-md") { exportMarkdown(); }
   else if (a === "import") { document.getElementById("importFile").click(); }
@@ -2977,6 +3156,7 @@ try {
 applyTheme();
 if (state.data.settings.passcodeHash) state.view = "lock";
 render();
+syncInit();
 // ブラウザに「このサイトのデータを消さないで」と頼む（対応環境のみ。長期保存の保険）
 if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
 // PWA（オフライン起動）用。ローカルファイル起動(file://)ではSWは使えないのでスキップ
