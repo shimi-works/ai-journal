@@ -407,7 +407,7 @@ button.song-card:hover { border-color: var(--accent); }
 // ===== 定数 =====
 const STORAGE_KEY = "ai-journal";
 const SCHEMA_VERSION = 4;
-const APP_BUILD = "2026-07-15.7";   // 設定画面の最下部に表示（更新が届いたかの確認用）
+const APP_BUILD = "2026-07-15.8";   // 設定画面の最下部に表示（更新が届いたかの確認用）
 // 画像は縮小・JPEG圧縮してからIndexedDBへ保存する（localStorageは容量が小さいので本文だけ置く）
 const IMAGE_MAX_DIM = 1280;        // 長辺の上限px（これを超える写真は自動で縮小）
 const IMAGE_JPEG_QUALITY = 0.82;
@@ -3090,16 +3090,24 @@ async function itunesSearch(term) {
     if (res.ok) return normalizeItunes(await res.json());
   } catch (e) { console.warn("itunes fetch失敗 → JSONPで再試行:", e); }
   // ②JSONPフォールバック（fetchがCORSで落ちる環境向け）
-  return new Promise((resolve, reject) => {
-    const cb = "_itunesCb" + (itunesSeq++);
-    const script = document.createElement("script");
-    const timer = setTimeout(() => { cleanup(); reject(new Error("timeout")); }, 10000);
-    function cleanup() { clearTimeout(timer); delete window[cb]; script.remove(); }
-    window[cb] = data => { cleanup(); resolve(normalizeItunes(data)); };
-    script.onerror = () => { cleanup(); reject(new Error("network")); };
-    script.src = "https://itunes.apple.com/search?" + ITUNES_QS + encodeURIComponent(term) + "&callback=" + cb;
-    document.head.appendChild(script);
-  });
+  try {
+    return await new Promise((resolve, reject) => {
+      const cb = "_itunesCb" + (itunesSeq++);
+      const script = document.createElement("script");
+      const timer = setTimeout(() => { cleanup(); reject(new Error("timeout")); }, 8000);
+      function cleanup() { clearTimeout(timer); delete window[cb]; script.remove(); }
+      window[cb] = data => { cleanup(); resolve(normalizeItunes(data)); };
+      script.onerror = () => { cleanup(); reject(new Error("network")); };
+      script.src = "https://itunes.apple.com/search?" + ITUNES_QS + encodeURIComponent(term) + "&callback=" + cb;
+      document.head.appendChild(script);
+    });
+  } catch (e) { console.warn("itunes JSONP失敗 → 中継役で再試行:", e); }
+  // ③中継役（Cloudflare Worker）フォールバック。iCloudプライベートリレー等の共有IP経由だと
+  //   Apple直行がレート制限で拒否されるため（しみのiPhoneで実発生）、Worker側でApple→Deezerの
+  //   順に取得してiTunes形式で返してくれる
+  const res = await fetch("https://shimi-sync.shimi-works.workers.dev/v1/itunes?term=" + encodeURIComponent(term));
+  if (!res.ok) throw new Error("proxy " + res.status);
+  return normalizeItunes(await res.json());
 }
 
 // 30秒プレビューの再生（同時に1曲だけ）
