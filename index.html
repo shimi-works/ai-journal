@@ -622,9 +622,12 @@ async function detectBioAvailable() {
   } catch { return false; }
 }
 async function bioEnable() {
-  if (!await verifyCurrentPass()) return;
+  // 注意: 先にprompt()等のダイアログを出すと「ボタンを押した」というユーザー操作の
+  // 扱いが消費され、iOSのSafariがWebAuthn登録を拒否する。そのため生体認証の登録を
+  // 先に行い、パスワードの本人確認はその後（保存する前）に行う。
+  let cred;
   try {
-    const cred = await navigator.credentials.create({ publicKey: {
+    cred = await navigator.credentials.create({ publicKey: {
       challenge: crypto.getRandomValues(new Uint8Array(32)),
       rp: { name: "AI Journal" },
       user: { id: crypto.getRandomValues(new Uint8Array(16)), name: "日記の持ち主", displayName: "日記の持ち主" },
@@ -633,13 +636,17 @@ async function bioEnable() {
       timeout: 60000,
       attestation: "none"
     } });
-    localStorage.setItem(BIO_KEY, JSON.stringify({ credId: bufToB64url(cred.rawId) }));
-    render();
-    toast("顔認証・指紋でのロック解除を有効にしました（この端末のみ）");
   } catch (e) {
     console.error(e);
-    if (e.name !== "NotAllowedError") toast("顔認証を設定できませんでした");
+    toast(e.name === "NotAllowedError"
+      ? "顔認証の登録がキャンセルまたは拒否されました"
+      : "顔認証を設定できませんでした（" + (e.message || e.name) + "）");
+    return;
   }
+  if (!await verifyCurrentPass()) return;   // 本人確認できなければ登録は保存しない
+  localStorage.setItem(BIO_KEY, JSON.stringify({ credId: bufToB64url(cred.rawId) }));
+  render();
+  toast("顔認証・指紋でのロック解除を有効にしました（この端末のみ）");
 }
 function bioDisable() {
   localStorage.removeItem(BIO_KEY);
