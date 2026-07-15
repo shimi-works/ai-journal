@@ -369,7 +369,7 @@ button.ghost:hover { background: var(--surface-2); }
   display: flex; align-items: center; justify-content: center; padding: 0; text-decoration: none;
 }
 .song-btn:hover { border-color: var(--accent); }
-.song-results { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.song-results { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; max-height: 330px; overflow-y: auto; }
 button.song-card { cursor: pointer; }
 button.song-card:hover { border-color: var(--accent); }
 .entry-song { margin-bottom: 16px; }
@@ -407,7 +407,7 @@ button.song-card:hover { border-color: var(--accent); }
 // ===== 定数 =====
 const STORAGE_KEY = "ai-journal";
 const SCHEMA_VERSION = 4;
-const APP_BUILD = "2026-07-15.8";   // 設定画面の最下部に表示（更新が届いたかの確認用）
+const APP_BUILD = "2026-07-15.9";   // 設定画面の最下部に表示（更新が届いたかの確認用）
 // 画像は縮小・JPEG圧縮してからIndexedDBへ保存する（localStorageは容量が小さいので本文だけ置く）
 const IMAGE_MAX_DIM = 1280;        // 長辺の上限px（これを超える写真は自動で縮小）
 const IMAGE_JPEG_QUALITY = 0.82;
@@ -3068,7 +3068,7 @@ function leaveWriteSafely() {
 // 旧形式（手入力のtitle/artist/urlだけ）のデータもそのまま表示できる。
 let itunesSeq = 0;
 let songSearchTimer = null;
-const ITUNES_QS = "media=music&entity=song&country=JP&lang=ja_jp&limit=8&term=";
+const ITUNES_QS = "media=music&entity=song&country=JP&lang=ja_jp&limit=25&term=";
 function normalizeItunes(data) {
   return (data.results || []).map(r => ({
     title: r.trackName || "",
