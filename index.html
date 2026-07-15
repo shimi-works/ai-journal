@@ -407,7 +407,7 @@ button.song-card:hover { border-color: var(--accent); }
 // ===== 定数 =====
 const STORAGE_KEY = "ai-journal";
 const SCHEMA_VERSION = 4;
-const APP_BUILD = "2026-07-15.6";   // 設定画面の最下部に表示（更新が届いたかの確認用）
+const APP_BUILD = "2026-07-15.7";   // 設定画面の最下部に表示（更新が届いたかの確認用）
 // 画像は縮小・JPEG圧縮してからIndexedDBへ保存する（localStorageは容量が小さいので本文だけ置く）
 const IMAGE_MAX_DIM = 1280;        // 長辺の上限px（これを超える写真は自動で縮小）
 const IMAGE_JPEG_QUALITY = 0.82;
@@ -493,6 +493,7 @@ const state = {
   songQuery: "",       // テーマソング検索の入力値（再描画で消えないよう保持）
   songResults: null,   // 検索結果（null=未検索）
   songSearching: false,
+  songError: false,    // 直近の検索が通信エラーだったか（0件と区別して表示）
   lockShowPass: false  // 顔認証設定時、パスワード入力をあえて出すか
 };
 
@@ -3067,25 +3068,36 @@ function leaveWriteSafely() {
 // 旧形式（手入力のtitle/artist/urlだけ）のデータもそのまま表示できる。
 let itunesSeq = 0;
 let songSearchTimer = null;
-function itunesSearch(term) {
+const ITUNES_QS = "media=music&entity=song&country=JP&lang=ja_jp&limit=8&term=";
+function normalizeItunes(data) {
+  return (data.results || []).map(r => ({
+    title: r.trackName || "",
+    artist: r.artistName || "",
+    url: r.trackViewUrl || "",
+    artwork: r.artworkUrl100 || r.artworkUrl60 || "",
+    preview: r.previewUrl || ""
+  })).filter(r => r.title);
+}
+async function itunesSearch(term) {
+  // ①通常のfetch。AppleはOriginヘッダ付きのリクエストにはCORS許可を返すのでこれが本命
+  //   （iOSではJSONPのscript注入がコンテンツブロッカー等に弾かれる報告があるため）
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 8000);
+    const res = await fetch("https://itunes.apple.com/search?" + ITUNES_QS + encodeURIComponent(term),
+      { signal: ctrl.signal });
+    clearTimeout(timer);
+    if (res.ok) return normalizeItunes(await res.json());
+  } catch (e) { console.warn("itunes fetch失敗 → JSONPで再試行:", e); }
+  // ②JSONPフォールバック（fetchがCORSで落ちる環境向け）
   return new Promise((resolve, reject) => {
     const cb = "_itunesCb" + (itunesSeq++);
     const script = document.createElement("script");
     const timer = setTimeout(() => { cleanup(); reject(new Error("timeout")); }, 10000);
     function cleanup() { clearTimeout(timer); delete window[cb]; script.remove(); }
-    window[cb] = data => {
-      cleanup();
-      resolve((data.results || []).map(r => ({
-        title: r.trackName || "",
-        artist: r.artistName || "",
-        url: r.trackViewUrl || "",
-        artwork: r.artworkUrl100 || r.artworkUrl60 || "",
-        preview: r.previewUrl || ""
-      })).filter(r => r.title));
-    };
+    window[cb] = data => { cleanup(); resolve(normalizeItunes(data)); };
     script.onerror = () => { cleanup(); reject(new Error("network")); };
-    script.src = "https://itunes.apple.com/search?media=music&entity=song&country=JP&lang=ja_jp&limit=8&callback="
-      + cb + "&term=" + encodeURIComponent(term);
+    script.src = "https://itunes.apple.com/search?" + ITUNES_QS + encodeURIComponent(term) + "&callback=" + cb;
     document.head.appendChild(script);
   });
 }
@@ -3138,6 +3150,7 @@ function songAreaHTML() {
 }
 function songResultsHTML() {
   if (state.songSearching) return `<div class="label">検索中…</div>`;
+  if (state.songError) return `<div class="label">検索できませんでした（通信エラー）。電波やWi-Fi、広告ブロッカーを確認してみてください</div>`;
   if (!state.songResults) return "";
   if (!state.songResults.length) return `<div class="label">見つかりませんでした</div>`;
   return state.songResults.map((r, i) =>
@@ -3498,15 +3511,15 @@ document.addEventListener("input", e => {
     const q = e.target.value.trim();
     const box = () => document.getElementById("songResults");
     if (q.length < 2) {
-      state.songResults = null; state.songSearching = false;
+      state.songResults = null; state.songSearching = false; state.songError = false;
       if (box()) box().innerHTML = "";
       return;
     }
     songSearchTimer = setTimeout(async () => {
-      state.songSearching = true;
+      state.songSearching = true; state.songError = false;
       if (box()) box().innerHTML = songResultsHTML();
       try { state.songResults = await itunesSearch(q); }
-      catch (err) { console.error(err); state.songResults = []; }
+      catch (err) { console.error(err); state.songResults = []; state.songError = true; }
       state.songSearching = false;
       if (box()) box().innerHTML = songResultsHTML();
     }, 400);
