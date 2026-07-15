@@ -351,13 +351,27 @@ button.ghost:hover { background: var(--surface-2); }
   border: 1px solid var(--border); border-radius: var(--radius); color: var(--text); font-family: inherit;
 }
 .song-fields input::placeholder { color: #565c68; }
-.song-line {
-  display: inline-flex; align-items: center; gap: 6px; font-size: 14.5px;
-  background: var(--surface); border: 1px solid var(--border); border-radius: 999px; padding: 6px 14px;
-  color: var(--text); text-decoration: none;
+.song-card {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 8px 10px; color: var(--text); font-family: inherit; font-size: inherit; text-align: left;
 }
-.song-line .icn { color: var(--accent); }
-a.song-line:hover { border-color: var(--accent); }
+.song-card img, .song-card .song-art-ph {
+  width: 44px; height: 44px; border-radius: 8px; flex: none; object-fit: cover;
+}
+.song-card .song-art-ph { display: flex; align-items: center; justify-content: center; background: var(--surface-2); color: var(--accent); }
+.song-card .song-meta { flex: 1; min-width: 0; }
+.song-card .song-meta .t { font-size: 14.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.song-card .song-meta .a { font-size: 12.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.song-btn {
+  width: 36px; height: 36px; border-radius: 50%; border: 1px solid var(--border);
+  background: var(--surface-2); color: var(--text); cursor: pointer; flex: none;
+  display: flex; align-items: center; justify-content: center; padding: 0; text-decoration: none;
+}
+.song-btn:hover { border-color: var(--accent); }
+.song-results { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+button.song-card { cursor: pointer; }
+button.song-card:hover { border-color: var(--accent); }
 .entry-song { margin-bottom: 16px; }
 .entry-images { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 8px; margin-top: 20px; }
 .entry-img { padding: 0; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; background: var(--surface); cursor: zoom-in; aspect-ratio: 1; }
@@ -393,7 +407,7 @@ a.song-line:hover { border-color: var(--accent); }
 // ===== 定数 =====
 const STORAGE_KEY = "ai-journal";
 const SCHEMA_VERSION = 4;
-const APP_BUILD = "2026-07-15.3";   // 設定画面の最下部に表示（更新が届いたかの確認用）
+const APP_BUILD = "2026-07-15.4";   // 設定画面の最下部に表示（更新が届いたかの確認用）
 // 画像は縮小・JPEG圧縮してからIndexedDBへ保存する（localStorageは容量が小さいので本文だけ置く）
 const IMAGE_MAX_DIM = 1280;        // 長辺の上限px（これを超える写真は自動で縮小）
 const IMAGE_JPEG_QUALITY = 0.82;
@@ -475,7 +489,11 @@ const state = {
   calMonth: null,      // カレンダー表示月 "YYYY-MM"
   popMonth: null,      // write画面の日付選択ポップアップの表示月 "YYYY-MM"
   searchQuery: "",
-  extracting: null     // ネタ帳の一括抽出中 { done, total }（連打防止と進捗表示）
+  extracting: null,    // ネタ帳の一括抽出中 { done, total }（連打防止と進捗表示）
+  songQuery: "",       // テーマソング検索の入力値（再描画で消えないよう保持）
+  songResults: null,   // 検索結果（null=未検索）
+  songSearching: false,
+  lockShowPass: false  // 顔認証設定時、パスワード入力をあえて出すか
 };
 
 // ===== storage層 =====
@@ -575,6 +593,7 @@ async function hashText(s) {
 
 async function tryUnlock() {
   const input = document.getElementById("lockPass");
+  if (!input) return;   // 顔認証モードの画面にはパスワード欄がない
   const h = await hashText(input.value);
   if (h === state.data.settings.passcodeHash) {
     state.view = "list";
@@ -656,7 +675,7 @@ function bioDisable() {
   toast("顔認証でのロック解除を無効にしました");
 }
 let bioBusy = false;   // 認証ダイアログの二重起動防止
-async function bioUnlock() {
+async function bioUnlock(auto) {
   const rec = bioRec();
   if (!rec || !rec.credId || bioBusy) return;
   bioBusy = true;
@@ -668,11 +687,13 @@ async function bioUnlock() {
       timeout: 60000
     } });
     state.view = "list";
+    state.lockShowPass = false;
     render();
   } catch (e) {
     console.error(e);
-    // キャンセル(NotAllowedError)は黙って戻す。それ以外はパスワードでの救済を案内
-    if (e.name !== "NotAllowedError") toast("顔認証で開けませんでした（パスワードでも開けます）");
+    // 自動起動分の失敗（未対応・ジェスチャー必須など）は黙ってボタン待ちに戻す。
+    // 手動でもキャンセル(NotAllowedError)は無言。それ以外はパスワードでの救済を案内
+    if (!auto && e.name !== "NotAllowedError") toast("顔認証で開けませんでした（「パスワードで開く」も使えます）");
   } finally { bioBusy = false; }
 }
 
@@ -1630,6 +1651,8 @@ const ICON_PATHS = {
   help: '<circle cx="12" cy="12" r="8.8"/><path d="M9.6 9.3a2.5 2.5 0 1 1 3.7 2.3c-.8.4-1.3.9-1.3 1.9"/><line x1="12" y1="16.4" x2="12" y2="16.6"/>',
   lock: '<rect x="5.5" y="11" width="13" height="9" rx="2"/><path d="M8.5 11V8a3.5 3.5 0 0 1 7 0v3"/>',
   user: '<circle cx="12" cy="8.2" r="3.7"/><path d="M5 20c.8-3.6 3.7-5.4 7-5.4s6.2 1.8 7 5.4"/>',
+  play: '<polygon points="9 5.5 19 12 9 18.5"/>',
+  stop: '<rect x="7" y="7" width="10" height="10" rx="1.5"/>',
   clock: '<circle cx="12" cy="12" r="8.4"/><polyline points="12 7.6 12 12 15 14"/>',
   sparkles: '<path d="M11 5.5l1.4 3.4 3.4 1.4-3.4 1.4L11 15.1l-1.4-3.4-3.4-1.4 3.4-1.4z"/><path d="M18 14.5l.8 1.9 1.9.8-1.9.8-.8 1.9-.8-1.9-1.9-.8 1.9-.8z"/>',
   pin: '<path d="M12 21s-6.5-5.5-6.5-10.3a6.5 6.5 0 0 1 13 0C18.5 15.5 12 21 12 21z"/><circle cx="12" cy="10.6" r="2.2"/>',
@@ -1694,7 +1717,13 @@ function weatherSVG(code, size = 16) {
   return `<svg class="icn" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${WEATHER_ICON[weatherKind(code)]}</svg>`;
 }
 
+let lastRenderedView = null;
 function render() {
+  // 画面を移動したら試聴中の曲は止める（裏で鳴り続けないように）
+  if (lastRenderedView !== state.view) {
+    lastRenderedView = state.view;
+    if (previewingUrl) stopPreview();
+  }
   const app = document.getElementById("app");
   const views = {
     list: renderList, calendar: renderCalendar, review: renderReview, graph: renderGraph,
@@ -1971,7 +2000,7 @@ function renderHelp() {
         <p>キーボードなら <span class="key">Ctrl+Enter</span> で保存、<span class="key">Esc</span> で戻れます。</p>`)}
       ${sec("image", "写真とテーマソング", `
         <p><b>${icon("image", 13)} 写真を追加</b>から、その日の写真を何枚でも添付できます（自動で縮小されるので容量にやさしい）。タップで拡大、書く画面では × で外せます。</p>
-        <p><b>${icon("music", 13)} テーマソング</b>: 曲名・アーティストと、あれば <b>SpotifyやYouTubeのURL</b> を貼っておくと、日記からタップして曲を開けます。オフラインでも記録自体は残ります。</p>
+        <p><b>${icon("music", 13)} テーマソング</b>: 曲名やアーティストで検索して選ぶだけ。ジャケット写真つきで記録され、日記から<b>30秒プレビューをその場で再生</b>できます（Apple Musicで開くことも可能）。検索にはネット接続が必要です。</p>
         <p>写真は端末内（IndexedDB）に保存され、<b>JSONバックアップにも一緒に入る</b>ので、機種変更や復元でも写真ごと戻せます。※Markdownエクスポートは文章のみで、写真は含まれません。</p>`)}
       ${sec("list", "読む・編集する・AIをやり直す", `
         <p>リストのカードをタップすると日記が開きます。右上の <b>${icon("pen", 13)}</b> で編集、<b>${icon("trash", 13)}</b> で削除。</p>
@@ -2016,7 +2045,7 @@ function renderHelp() {
       ${sec("lock", "パスワードロック", `
         <p>設定から<b>数字4桁</b>で設定できます。次からアプリを開くときに入力を求められます（4桁入れると自動で開きます）。</p>
         <p>忘れたら、ロック画面の「パスワードを忘れた場合」→「<b>リセット</b>」と入力すれば解除されます。<b>日記は消えません</b>。</p>
-        <p>パスワード設定後は、設定から<b>顔認証・指紋（Face ID / Windows Hello）でのロック解除</b>も有効にできます（端末ごとの設定・顔や指紋のデータがアプリに渡ることはありません）。</p>
+        <p>パスワード設定後は、設定から<b>顔認証・指紋（Face ID / Windows Hello）でのロック解除</b>も有効にできます（端末ごとの設定・顔や指紋のデータがアプリに渡ることはありません）。有効にすると、<b>アプリを開いた瞬間に自動で顔認証</b>がかかり、パスワード入力は「パスワードで開く」を押したときだけ表示されます。</p>
         <p>※覗き見防止の簡易ロックです（データそのものの暗号化ではありません）。</p>`)}
       ${sec("palette", "見た目を変える", `
         <p>設定から<b>テーマカラー6色・文字サイズ（小/標準/大）・フォント（ゴシック/明朝/丸ゴシック）</b>を変えられます。</p>`)}
@@ -2024,13 +2053,23 @@ function renderHelp() {
 }
 
 // --- ロック ---
+// 顔認証設定済みの端末では顔認証が主役（開いた直後に自動で起動）。パスワード入力は
+// 「パスワードで開く」を押したときだけ出す。未設定の端末は従来どおりパスワードのみ。
 function renderLock() {
+  const bio = !!bioRec();
+  if (bio && !state.lockShowPass) {
+    return `<div class="lock-view">
+      <span class="lock-icon" style="color:var(--accent)">${icon("lock", 44)}</span>
+      <button class="primary" data-action="bio-unlock">${icon("user", 16)} 顔認証・指紋で開く</button>
+      <button class="ghost" style="width:240px" data-action="show-pass">パスワードで開く</button>
+    </div>`;
+  }
   return `<div class="lock-view">
     <span class="lock-icon" style="color:var(--accent)">${icon("lock", 44)}</span>
     <input type="password" id="lockPass" placeholder="4桁の数字" inputmode="numeric" pattern="[0-9]*"
       maxlength="4" autocomplete="one-time-code">
     <button class="primary" data-action="unlock">開く</button>
-    ${bioRec() ? `<button class="ghost" style="width:240px" data-action="bio-unlock">${icon("user", 16)} 顔認証・指紋で開く</button>` : ""}
+    ${bio ? `<button class="ghost" style="width:240px" data-action="bio-unlock">${icon("user", 16)} 顔認証・指紋で開く</button>` : ""}
     <button class="ghost" style="width:240px" data-action="forgot-pass">パスワードを忘れた場合</button>
   </div>`;
 }
@@ -2042,7 +2081,6 @@ function renderWrite() {
   const moodBtns = MOODS.map(m =>
     `<button data-action="pick-mood" data-mood="${m.value}" class="${state.draft.mood === m.value ? "active" : ""}">${moodSVG(m.value, 30)}<span class="mood-name">${m.name}</span></button>`).join("");
   const isToday = state.draft.date === todayStr();
-  const song = state.draft.song || {};
   return `
     <div class="topbar" style="position:relative">
       <button class="icon-btn" data-action="back" title="戻る" aria-label="戻る">←</button>
@@ -2069,11 +2107,7 @@ function renderWrite() {
       </div>
       <div>
         <div class="ask-label">${isToday ? "今日" : "この日"}のテーマソング（任意）</div>
-        <div class="song-fields">
-          <input type="text" id="songTitle" placeholder="曲名" autocomplete="off" value="${esc(song.title || "")}">
-          <input type="text" id="songArtist" placeholder="アーティスト（任意）" autocomplete="off" value="${esc(song.artist || "")}">
-          <input type="url" id="songUrl" placeholder="URL（Spotify / YouTube など・任意）" autocomplete="off" value="${esc(song.url || "")}">
-        </div>
+        <div id="songArea">${songAreaHTML()}</div>
       </div>
       <div>
         <input type="text" id="title" placeholder="タイトル" autocomplete="off" value="${esc(state.draft.title || "")}">
@@ -2155,6 +2189,12 @@ function entryAiHTML(e) {
 // テーマソングの表示（URLがあればタップで外部アプリを開くリンクにする）
 function songLineHTML(song) {
   if (!song || (!song.title && !song.url)) return "";
+  // 新形式（検索で選んだ曲）はジャケット＋プレビュー付きカード。旧形式は従来のピル表示
+  if (song.artwork || song.preview) {
+    const link = song.url && /^https?:\/\//i.test(song.url)
+      ? `<a class="song-btn" href="${esc(song.url)}" target="_blank" rel="noopener noreferrer" title="Apple Musicで開く">${icon("share", 15)}</a>` : "";
+    return `<div class="song-card">${songCardHTML(song, songPreviewBtnHTML(song) + link)}</div>`;
+  }
   const label = song.title
     ? esc(song.title) + (song.artist ? ` — ${esc(song.artist)}` : "")
     : "テーマソング";
@@ -3020,12 +3060,94 @@ function leaveWriteSafely() {
   }
 }
 
-// テーマソング欄を読み取る。全部空ならnull（記録なし）
+// ===== テーマソング（Apple Music検索＋30秒プレビュー） =====
+// iTunes Search API（無料・キー不要）で曲を検索する。CORSが不安定なためJSONPで呼ぶ。
+// 選んだ曲は { title, artist, url(Apple Musicリンク), artwork(ジャケット), preview(30秒試聴URL) }。
+// 旧形式（手入力のtitle/artist/urlだけ）のデータもそのまま表示できる。
+let itunesSeq = 0;
+let songSearchTimer = null;
+function itunesSearch(term) {
+  return new Promise((resolve, reject) => {
+    const cb = "_itunesCb" + (itunesSeq++);
+    const script = document.createElement("script");
+    const timer = setTimeout(() => { cleanup(); reject(new Error("timeout")); }, 10000);
+    function cleanup() { clearTimeout(timer); delete window[cb]; script.remove(); }
+    window[cb] = data => {
+      cleanup();
+      resolve((data.results || []).map(r => ({
+        title: r.trackName || "",
+        artist: r.artistName || "",
+        url: r.trackViewUrl || "",
+        artwork: r.artworkUrl100 || r.artworkUrl60 || "",
+        preview: r.previewUrl || ""
+      })).filter(r => r.title));
+    };
+    script.onerror = () => { cleanup(); reject(new Error("network")); };
+    script.src = "https://itunes.apple.com/search?media=music&entity=song&country=JP&lang=ja_jp&limit=8&callback="
+      + cb + "&term=" + encodeURIComponent(term);
+    document.head.appendChild(script);
+  });
+}
+
+// 30秒プレビューの再生（同時に1曲だけ）
+let previewAudio = null, previewingUrl = null;
+function stopPreview() {
+  if (previewAudio) { previewAudio.pause(); previewAudio = null; }
+  previewingUrl = null;
+}
+function refreshSongUI() {
+  if (state.view === "write") {
+    const el = document.getElementById("songArea");
+    if (el) el.innerHTML = songAreaHTML();
+  } else {
+    render();   // entry画面などは丸ごと描き直してよい（入力欄がない）
+  }
+}
+function togglePreview(url) {
+  if (previewingUrl === url) { stopPreview(); refreshSongUI(); return; }
+  stopPreview();
+  previewAudio = new Audio(url);
+  previewingUrl = url;
+  previewAudio.onended = () => { stopPreview(); refreshSongUI(); };
+  previewAudio.play().catch(() => { stopPreview(); toast("プレビューを再生できませんでした"); refreshSongUI(); });
+  refreshSongUI();
+}
+
+function songCardHTML(s, actions) {
+  const art = s.artwork
+    ? `<img src="${esc(s.artwork)}" alt="" loading="lazy">`
+    : `<span class="song-art-ph">${icon("music", 20)}</span>`;
+  const meta = `<div class="song-meta"><div class="t">${esc(s.title || s.url)}</div><div class="a">${esc(s.artist || "")}</div></div>`;
+  return art + meta + (actions || "");
+}
+function songPreviewBtnHTML(s) {
+  if (!s.preview) return "";
+  return `<span class="song-btn" role="button" data-action="song-preview" data-url="${esc(s.preview)}" title="30秒プレビュー">${previewingUrl === s.preview ? icon("stop", 15) : icon("play", 15)}</span>`;
+}
+function songAreaHTML() {
+  const s = state.draft.song;
+  if (s && (s.title || s.url)) {
+    return `<div class="song-card">${songCardHTML(s,
+      songPreviewBtnHTML(s) + `<span class="song-btn" role="button" data-action="song-clear" title="曲をはずす">✕</span>`)}</div>`;
+  }
+  return `<div class="song-fields">
+    <input type="text" id="songSearch" placeholder="曲名やアーティストで検索（Apple Music）" autocomplete="off" value="${esc(state.songQuery)}">
+    <div id="songResults" class="song-results">${songResultsHTML()}</div>
+  </div>`;
+}
+function songResultsHTML() {
+  if (state.songSearching) return `<div class="label">検索中…</div>`;
+  if (!state.songResults) return "";
+  if (!state.songResults.length) return `<div class="label">見つかりませんでした</div>`;
+  return state.songResults.map((r, i) =>
+    `<button type="button" class="song-card" data-action="song-pick" data-idx="${i}">${songCardHTML(r, songPreviewBtnHTML(r))}</button>`
+  ).join("");
+}
+
+// 保存用に下書きの曲を返す。未選択ならnull
 function readDraftSong() {
-  const val = id => (document.getElementById(id)?.value || "").trim();
-  const title = val("songTitle"), artist = val("songArtist"), url = val("songUrl");
-  if (!title && !artist && !url) return null;
-  return { title, artist, url };
+  const s = state.draft.song;
+  return s && (s.title || s.url) ? s : null;
 }
 
 function handleSave() {
@@ -3099,12 +3221,14 @@ document.addEventListener("click", e => {
     state.editingId = null;
     state.draft = { score: null, mood: null, date: todayStr(), title: "", body: "", images: [], song: null };
     state.draftImagesOrig = [];
+    state.songResults = null; state.songQuery = "";
     state.view = "write"; render();
   }
   else if (a === "edit-entry") {
     const e2 = findEntry(state.entryId);
     if (e2) {
       state.editingId = e2.id;
+      state.songResults = null; state.songQuery = "";
       state.draft = {
         score: e2.score, mood: e2.mood, date: e2.date, title: e2.title, body: e2.body,
         images: [...(e2.images || [])], song: e2.song ? { ...e2.song } : null
@@ -3190,6 +3314,22 @@ document.addEventListener("click", e => {
     if (hit) { state.entryFrom = "calendar"; state.view = "entry"; state.entryId = hit.id; render(); }
   }
   else if (a === "unlock") { tryUnlock(); }
+  else if (a === "song-preview") { togglePreview(el.dataset.url); }
+  else if (a === "song-pick") {
+    const r = (state.songResults || [])[Number(el.dataset.idx)];
+    if (r) {
+      state.draft.song = { ...r };
+      state.songResults = null; state.songQuery = "";
+      stopPreview();
+      refreshSongUI();
+    }
+  }
+  else if (a === "song-clear") {
+    state.draft.song = null;
+    stopPreview();
+    refreshSongUI();
+  }
+  else if (a === "show-pass") { state.lockShowPass = true; render(); }
   else if (a === "bio-unlock") { bioUnlock(); }
   else if (a === "bio-enable") { bioEnable(); }
   else if (a === "bio-disable") { bioDisable(); }
@@ -3350,6 +3490,25 @@ document.addEventListener("input", e => {
     document.getElementById("searchResults").innerHTML = searchResultsHTML();
   } else if (e.target.id === "lockPass" && e.target.value.length === 4) {
     tryUnlock();   // 4桁入れたら自動で判定（開くボタンを押す手間を省く）
+  } else if (e.target.id === "songSearch") {
+    // テーマソング検索: 入力が止まって400ms後に検索（結果エリアだけ差し替えて入力を保つ）
+    state.songQuery = e.target.value;
+    clearTimeout(songSearchTimer);
+    const q = e.target.value.trim();
+    const box = () => document.getElementById("songResults");
+    if (q.length < 2) {
+      state.songResults = null; state.songSearching = false;
+      if (box()) box().innerHTML = "";
+      return;
+    }
+    songSearchTimer = setTimeout(async () => {
+      state.songSearching = true;
+      if (box()) box().innerHTML = songResultsHTML();
+      try { state.songResults = await itunesSearch(q); }
+      catch (err) { console.error(err); state.songResults = []; }
+      state.songSearching = false;
+      if (box()) box().innerHTML = songResultsHTML();
+    }, 400);
   }
 });
 
@@ -3420,6 +3579,8 @@ try {
 applyTheme();
 if (state.data.settings.passcodeHash) state.view = "lock";
 render();
+// 顔認証設定済みなら、開いた瞬間に自動で顔認証をかける（失敗したらボタンから再試行できる）
+if (state.view === "lock" && bioRec()) setTimeout(() => bioUnlock(true), 250);
 syncInit();
 // ブラウザに「このサイトのデータを消さないで」と頼む（対応環境のみ。長期保存の保険）
 if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});

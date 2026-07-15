@@ -1,7 +1,7 @@
 // AI Journal Service Worker — オフラインでも起動できるようにする
 // 方針: 同一オリジンのGETは stale-while-revalidate（キャッシュを即返し、裏で更新）。
 //       Gemini・Open-Meteo等の外部APIには関与しない（ネットワーク直）。
-const CACHE = "ai-journal-v22";  // zipインポート・顔認証ロック解除を追加
+const CACHE = "ai-journal-v23";  // 曲検索テーマソング・自動顔認証
 const APP_URL = "./";
 const ASSETS = ["./", "./index.html", "./manifest.webmanifest", "./icon-192.png", "./icon-512.png", "./icon-180.png"];
 
