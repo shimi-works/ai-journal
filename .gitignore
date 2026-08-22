@@ -1,0 +1,30 @@
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+.dev.vars
+*.pem
+*.key
+*.jks
+*.keystore
+
+# User data and exports
+ai-journal-backup*.json
+ai-journal*.md
+
+# Dependencies and tool state
+node_modules/
+.wrangler/
+
+# Test and build output
+coverage/
+dist/
+test-results/
+playwright-report/
+*.log
+
+# Editors and operating systems
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
