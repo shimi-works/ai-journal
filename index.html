@@ -192,6 +192,7 @@ button.ghost:hover { background: var(--surface-2); }
 .entry-view .badges { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; font-size: 15px; }
 .badge { background: var(--surface); border: 1px solid var(--border); border-radius: 999px; padding: 2px 12px; font-size: 13.5px; }
 .entry-view .weather-line { font-size: 13px; color: var(--muted); margin-bottom: 24px; }
+.entry-view .health-line { font-size: 13px; color: var(--muted); margin-top: -16px; margin-bottom: 24px; }
 .entry-view .body { white-space: pre-wrap; font-size: 16px; }
 .entry-ai { margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--border); }
 .ai-summary {
@@ -407,7 +408,7 @@ button.song-card:hover { border-color: var(--accent); }
 // ===== 定数 =====
 const STORAGE_KEY = "ai-journal";
 const SCHEMA_VERSION = 4;
-const APP_BUILD = "2026-07-15.9";   // 設定画面の最下部に表示（更新が届いたかの確認用）
+const APP_BUILD = "2026-11-12.1";   // 設定画面の最下部に表示（更新が届いたかの確認用）
 // 画像は縮小・JPEG圧縮してからIndexedDBへ保存する（localStorageは容量が小さいので本文だけ置く）
 const IMAGE_MAX_DIM = 1280;        // 長辺の上限px（これを超える写真は自動で縮小）
 const IMAGE_JPEG_QUALITY = 0.82;
@@ -567,6 +568,7 @@ function migrateData(d) {
   for (const e of d.entries) {
     if (!Array.isArray(e.images)) e.images = [];
     if (!("song" in e)) e.song = null;
+    if (!("health" in e)) e.health = null;
   }
   return d;
 }
@@ -1012,7 +1014,7 @@ function importTextEntries(text) {
       time: f.time,
       title: f.title, body: f.body, mood: f.mood, score: f.score,
       weather: null, location: state.data.settings.location.name, ai: null,
-      images: [], song: null
+      images: [], song: null, health: null
     });
     added++;
   }
@@ -1173,7 +1175,7 @@ async function importZip(file) {
         weekday: WEEKDAYS[new Date(date + "T12:00:00").getDay()],
         time, title, body, mood: null, score: null,
         weather: null, location: state.data.settings.location.name, ai: null,
-        images, song: null
+        images, song: null, health: null
       });
       added++;
       if (done % 10 === 0) toast(`取り込み中… ${done}/${list.length}件`);
@@ -1237,6 +1239,23 @@ function weatherEmoji(code) {
 
 function weatherLine(w) {
   return `${weatherEmoji(w.code)} ${w.desc} ${w.temp}°C（最高${w.tempMax} / 最低${w.tempMin}）湿度${w.humidity}%`;
+}
+
+// 健康データ行（歩数・距離=Apple Health／摂取kcal=あすけん／体重=ヘルスケア手入力）。
+// 同期経由で外部から付与される表示専用フィールド。アプリ内では編集しない
+function healthLine(h) {
+  if (!h) return "";
+  const parts = [];
+  if (h.steps != null) {
+    let s = `🚶 ${Number(h.steps).toLocaleString("ja-JP")}歩`;
+    if (h.distanceKm != null) s += `・${h.distanceKm}km`;
+    parts.push(s);
+  } else if (h.distanceKm != null) {
+    parts.push(`🚶 ${h.distanceKm}km`);
+  }
+  if (h.kcal != null) parts.push(`🍚 ${Number(h.kcal).toLocaleString("ja-JP")}kcal`);
+  if (h.weightKg != null) parts.push(`⚖️ ${h.weightKg}kg`);
+  return parts.join("　");
 }
 
 // 場所検索（Open-Meteoジオコーディング・キー不要）。旅行時の天気取得地点の変更に使う
@@ -1614,7 +1633,8 @@ function saveEntry(title, body, mood, score, date, images, song) {
     location: state.data.settings.location.name,
     ai: null,
     images: images || [],
-    song: song || null
+    song: song || null,
+    health: null
   };
   state.data.entries.push(entry);
   saveData();
@@ -2259,6 +2279,7 @@ function renderEntry() {
       ${e.title ? `<h2>${esc(e.title)}</h2>` : ""}
       ${badges.length ? `<div class="badges">${badges.join("")}</div>` : ""}
       <div class="weather-line">${weather}</div>
+      ${e.health && healthLine(e.health) ? `<div class="health-line">${esc(healthLine(e.health))}</div>` : ""}
       ${e.song && (e.song.title || e.song.url) ? `<div class="entry-song">${songLineHTML(e.song)}</div>` : ""}
       <div class="body">${esc(e.body)}</div>
       ${e.images && e.images.length ? entryImagesHTML(e.images) : ""}
